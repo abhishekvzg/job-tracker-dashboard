@@ -9,7 +9,8 @@ import { CHANNEL_OPTIONS, STATUS_OPTIONS, type JobApp } from "@/lib/types";
 import { fmtDate, fmtShort, statusStyle } from "@/lib/format";
 
 type AuthState = "loading" | "no-credentials" | "unauthenticated" | "authenticated";
-type SortBy = "dateDesc" | "dateAsc" | "companyAz" | "status";
+type SortKey = "company" | "status" | "date" | "channel";
+type SortDir = "asc" | "desc";
 
 const EMPTY_FORM: AppFormState = {
   id: null,
@@ -50,7 +51,10 @@ export default function Home() {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("All");
   const [filterChannel, setFilterChannel] = useState("All");
-  const [sortBy, setSortBy] = useState<SortBy>("dateDesc");
+  const [sortKey, setSortKey] = useState<SortKey>("date");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [statusSavingId, setStatusSavingId] = useState<string | null>(null);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [calendarOpen, setCalendarOpen] = useState(false);
@@ -195,7 +199,7 @@ export default function Home() {
 
   const filteredApps = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let list = apps.filter((a) => {
+    const list = apps.filter((a) => {
       if (q && !a.company.toLowerCase().includes(q)) return false;
       if (filterStatus !== "All" && a.status !== filterStatus) return false;
       if (filterChannel !== "All" && (a.channel || "") !== filterChannel) return false;
@@ -203,15 +207,58 @@ export default function Home() {
       if (dateTo && (!a.dateApplied || a.dateApplied > dateTo)) return false;
       return true;
     });
-    list = list.slice().sort((a, b) => {
-      if (sortBy === "companyAz") return a.company.localeCompare(b.company);
-      if (sortBy === "status") return a.status.localeCompare(b.status);
-      const da = a.dateApplied || "";
-      const db = b.dateApplied || "";
-      return sortBy === "dateAsc" ? da.localeCompare(db) : db.localeCompare(da);
+    const dir = sortDir === "asc" ? 1 : -1;
+    return list.slice().sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === "company") cmp = a.company.localeCompare(b.company);
+      else if (sortKey === "status") cmp = a.status.localeCompare(b.status);
+      else if (sortKey === "channel") cmp = (a.channel || "").localeCompare(b.channel || "");
+      else cmp = (a.dateApplied || "").localeCompare(b.dateApplied || "");
+      if (cmp === 0) cmp = a.company.localeCompare(b.company);
+      return cmp * dir;
     });
-    return list;
-  }, [apps, search, filterStatus, filterChannel, dateFrom, dateTo, sortBy]);
+  }, [apps, search, filterStatus, filterChannel, dateFrom, dateTo, sortKey, sortDir]);
+
+  function toggleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "date" ? "desc" : "asc");
+    }
+  }
+
+  async function changeStatus(app: JobApp, status: string) {
+    if (status === app.status) return;
+    setStatusSavingId(app.id);
+    setError(null);
+    try {
+      const res = await fetch("/api/sheet", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: app.id,
+          company: app.company,
+          url: app.url,
+          status,
+          channel: app.channel,
+          poc: app.poc,
+          remarks: app.remarks,
+          extra: app.extra,
+          dateApplied: app.dateApplied,
+        }),
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        throw new Error(json.error || "Status update failed");
+      }
+      await loadApps();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setStatusSavingId(null);
+    }
+  }
 
   const todayStr = new Date().toISOString().slice(0, 10);
   const kpis = [
@@ -354,17 +401,6 @@ export default function Home() {
           ))}
         </select>
 
-        <select
-          value={sortBy}
-          onChange={(e) => setSortBy(e.target.value as SortBy)}
-          className="cursor-pointer rounded-[10px] border border-black/12 bg-[#fdfcfb] px-3.5 py-2.5 text-sm font-bold outline-none dark:border-white/10 dark:bg-neutral-800 dark:text-neutral-100"
-        >
-          <option value="dateDesc">Newest first</option>
-          <option value="dateAsc">Oldest first</option>
-          <option value="companyAz">Company A-Z</option>
-          <option value="status">Status</option>
-        </select>
-
         <div className="relative">
           <div className="flex items-stretch overflow-hidden rounded-[10px] border border-black/12 bg-[#fdfcfb] dark:border-white/10 dark:bg-neutral-800">
             <button
@@ -403,71 +439,53 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Grid */}
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-4">
-        {filteredApps.map((app) => (
-          <div
-            key={app.id}
-            className="flex flex-col gap-3 rounded-2xl border border-black/8 bg-white p-5 shadow-[0_1px_2px_rgba(31,26,23,0.03)] dark:border-white/10 dark:bg-neutral-900 dark:shadow-none"
-          >
-            <div className="flex items-start justify-between gap-2.5">
-              <div className="text-[16.5px] font-extrabold">{app.company}</div>
-              <div className={`whitespace-nowrap rounded-full px-2.5 py-1 text-[11.5px] font-extrabold ${statusStyle(app.status)}`}>
-                {app.status}
-              </div>
-            </div>
-
-            <div className="flex flex-wrap gap-2 text-[12.5px] font-bold">
-              <span className="rounded-lg bg-neutral-100 px-2.5 py-1 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                {app.channel || "No channel"}
-              </span>
-              {app.poc && (
-                <span className="rounded-lg bg-neutral-100 px-2.5 py-1 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                  POC: {app.poc}
-                </span>
-              )}
-              <span className="rounded-lg bg-neutral-100 px-2.5 py-1 text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400">
-                {fmtDate(app.dateApplied)}
-              </span>
-            </div>
-
-            {app.remarks && (
-              <div className="text-[13.5px] font-medium leading-snug text-neutral-600 dark:text-neutral-400">
-                {app.remarks}
-              </div>
-            )}
-
-            <div className="mt-1 flex gap-2">
-              {app.url ? (
-                <a
-                  href={app.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex-1 rounded-[10px] bg-neutral-900 px-3 py-2.5 text-center text-[13.5px] font-extrabold text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300"
-                >
-                  View Listing →
-                </a>
-              ) : (
-                <div className="flex-1 rounded-[10px] bg-neutral-100 px-3 py-2.5 text-center text-[13.5px] font-extrabold text-neutral-400 dark:bg-neutral-800 dark:text-neutral-500">
-                  No link
-                </div>
-              )}
-              <button
-                onClick={() => openEditModal(app)}
-                className="rounded-[10px] border border-black/12 bg-white px-3.5 py-2.5 text-[13.5px] font-extrabold hover:bg-neutral-50 dark:border-white/10 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700"
-              >
-                Edit
-              </button>
-              <button
-                onClick={() => deleteApp(app)}
-                disabled={deletingId === app.id}
-                className="rounded-[10px] border border-red-200 bg-white px-3.5 py-2.5 text-[13.5px] font-extrabold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/60 dark:bg-neutral-800 dark:text-red-400 dark:hover:bg-red-950/40"
-              >
-                {deletingId === app.id ? "…" : "Delete"}
-              </button>
-            </div>
-          </div>
-        ))}
+      {/* Applications list */}
+      <div className="overflow-x-auto rounded-2xl border border-black/8 bg-white shadow-[0_1px_2px_rgba(31,26,23,0.03)] dark:border-white/10 dark:bg-neutral-900 dark:shadow-none">
+        <table className="w-full min-w-[560px] border-collapse text-left">
+          <thead>
+            <tr className="border-b border-black/8 dark:border-white/10">
+              {(
+                [
+                  ["company", "Company"],
+                  ["status", "Status"],
+                  ["date", "Date applied"],
+                  ["channel", "Channel"],
+                ] as [SortKey, string][]
+              ).map(([key, label]) => (
+                <th key={key} className="p-0">
+                  <button
+                    onClick={() => toggleSort(key)}
+                    className="flex w-full items-center gap-1.5 px-4 py-3 text-[12.5px] font-extrabold uppercase tracking-wide text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+                  >
+                    {label}
+                    <span className={`text-[10px] ${sortKey === key ? "opacity-100" : "opacity-25"}`}>
+                      {sortKey === key ? (sortDir === "asc" ? "▲" : "▼") : "▲▼"}
+                    </span>
+                  </button>
+                </th>
+              ))}
+              <th className="w-10 p-0" aria-label="Expand" />
+            </tr>
+          </thead>
+          <tbody>
+            {filteredApps.map((app) => {
+              const expanded = expandedId === app.id;
+              return (
+                <FragmentRow
+                  key={app.id}
+                  app={app}
+                  expanded={expanded}
+                  statusSaving={statusSavingId === app.id}
+                  deleting={deletingId === app.id}
+                  onToggle={() => setExpandedId(expanded ? null : app.id)}
+                  onChangeStatus={(s) => changeStatus(app, s)}
+                  onEdit={() => openEditModal(app)}
+                  onDelete={() => deleteApp(app)}
+                />
+              );
+            })}
+          </tbody>
+        </table>
       </div>
 
       {!loading && filteredApps.length === 0 && (
@@ -504,4 +522,142 @@ function Center({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-6 text-foreground">{children}</div>
   );
+}
+
+function FragmentRow({
+  app,
+  expanded,
+  statusSaving,
+  deleting,
+  onToggle,
+  onChangeStatus,
+  onEdit,
+  onDelete,
+}: {
+  app: JobApp;
+  expanded: boolean;
+  statusSaving: boolean;
+  deleting: boolean;
+  onToggle: () => void;
+  onChangeStatus: (status: string) => void;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <>
+      <tr
+        onClick={onToggle}
+        className={`cursor-pointer border-b border-black/5 transition-colors hover:bg-orange-50/40 dark:border-white/5 dark:hover:bg-neutral-800/60 ${
+          expanded ? "bg-orange-50/60 dark:bg-neutral-800/80" : ""
+        }`}
+      >
+        <td className="px-4 py-3 text-[14.5px] font-extrabold">{app.company}</td>
+        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+          <select
+            value={app.status}
+            disabled={statusSaving}
+            onChange={(e) => onChangeStatus(e.target.value)}
+            className={`cursor-pointer appearance-none rounded-full border-0 px-3 py-1.5 pr-6 text-[12px] font-extrabold outline-none disabled:opacity-50 ${statusStyle(app.status)}`}
+            style={{
+              backgroundImage:
+                "url(\"data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6'%3E%3Cpath d='M0 0l4 6 4-6z' fill='%23888'/%3E%3C/svg%3E\")",
+              backgroundRepeat: "no-repeat",
+              backgroundPosition: "right 8px center",
+            }}
+          >
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </td>
+        <td className="px-4 py-3 text-[13.5px] font-bold text-neutral-600 dark:text-neutral-400">
+          {fmtDate(app.dateApplied)}
+        </td>
+        <td className="px-4 py-3 text-[13.5px] font-bold text-neutral-600 dark:text-neutral-400">
+          {app.channel || <span className="text-neutral-400 dark:text-neutral-600">—</span>}
+        </td>
+        <td className="px-3 py-3 text-center text-[11px] text-neutral-400">{expanded ? "▲" : "▼"}</td>
+      </tr>
+      {expanded && (
+        <tr className="border-b border-black/5 bg-[#fdfcfb] dark:border-white/5 dark:bg-neutral-950/40">
+          <td colSpan={5} className="px-5 py-4">
+            <div className="grid gap-x-8 gap-y-2.5 text-[13.5px] sm:grid-cols-2">
+              <DetailField label="Listing URL">
+                {app.url ? (
+                  <a
+                    href={app.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="break-all font-bold text-orange-700 underline-offset-2 hover:underline dark:text-orange-400"
+                  >
+                    {app.url}
+                  </a>
+                ) : (
+                  <Muted>None</Muted>
+                )}
+              </DetailField>
+              <DetailField label="Point of contact">
+                {app.poc ? <span className="font-bold">{app.poc}</span> : <Muted>None saved</Muted>}
+              </DetailField>
+              <DetailField label="Remarks">
+                {app.remarks ? (
+                  <span className="font-medium leading-snug text-neutral-700 dark:text-neutral-300">{app.remarks}</span>
+                ) : (
+                  <Muted>None</Muted>
+                )}
+              </DetailField>
+              {app.extra && (
+                <DetailField label="Extra">
+                  <span className="font-medium leading-snug text-neutral-700 dark:text-neutral-300">{app.extra}</span>
+                </DetailField>
+              )}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {app.url && (
+                <a
+                  href={app.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-[10px] bg-neutral-900 px-3.5 py-2 text-[13px] font-extrabold text-white hover:bg-neutral-700 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-neutral-300"
+                >
+                  View Listing →
+                </a>
+              )}
+              <button
+                onClick={onEdit}
+                className="rounded-[10px] border border-black/12 bg-white px-3.5 py-2 text-[13px] font-extrabold hover:bg-neutral-50 dark:border-white/10 dark:bg-neutral-800 dark:text-neutral-100 dark:hover:bg-neutral-700"
+              >
+                Edit
+              </button>
+              <button
+                onClick={onDelete}
+                disabled={deleting}
+                className="rounded-[10px] border border-red-200 bg-white px-3.5 py-2 text-[13px] font-extrabold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/60 dark:bg-neutral-800 dark:text-red-400 dark:hover:bg-red-950/40"
+              >
+                {deleting ? "…" : "Delete"}
+              </button>
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+function DetailField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <div className="text-[11px] font-extrabold uppercase tracking-wide text-neutral-400 dark:text-neutral-500">
+        {label}
+      </div>
+      <div className="mt-0.5">{children}</div>
+    </div>
+  );
+}
+
+function Muted({ children }: { children: React.ReactNode }) {
+  return <span className="font-semibold text-neutral-400 dark:text-neutral-600">{children}</span>;
 }

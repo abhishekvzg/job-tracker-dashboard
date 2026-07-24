@@ -53,13 +53,18 @@ export function ChatWidget({ onApplied }: { onApplied: () => void }) {
     const text = input.trim();
     if (!text || sending) return;
     setInput("");
+    // History from before this message, so the model can see its own follow-up questions.
+    const history = messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .slice(-12)
+      .map((m) => ({ role: m.role, text: m.text }));
     addMessage({ role: "user", text });
     setSending(true);
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, history }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -73,7 +78,7 @@ export function ChatWidget({ onApplied }: { onApplied: () => void }) {
         return;
       }
       const action = json.action as ChatAction;
-      if (action.intent === "unclear") {
+      if (action.intent === "unclear" || action.intent === "question") {
         addMessage({ role: "assistant", text: action.summary });
       } else {
         addMessage({ role: "assistant", text: action.summary, action });

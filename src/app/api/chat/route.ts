@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { interpretCommand, type ChatAction } from "@/lib/gemini";
+import { interpretCommand, type ChatAction, type ChatTurn } from "@/lib/gemini";
 import { createApp, deleteApp, getApp, listApps, updateApp } from "@/lib/sheets";
 
 function statusFor(message: string) {
@@ -83,8 +83,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Empty message" }, { status: 400 });
     }
 
+    const history: ChatTurn[] = Array.isArray(body.history)
+      ? (body.history as unknown[])
+          .filter(
+            (t): t is ChatTurn =>
+              !!t &&
+              typeof t === "object" &&
+              ((t as ChatTurn).role === "user" || (t as ChatTurn).role === "assistant") &&
+              typeof (t as ChatTurn).text === "string"
+          )
+          .slice(-12)
+      : [];
+
     const apps = await listApps();
-    const action = await interpretCommand(message, apps);
+    const action = await interpretCommand(message, apps, history);
     return NextResponse.json({ action });
   } catch (err) {
     const message = (err as Error).message;
