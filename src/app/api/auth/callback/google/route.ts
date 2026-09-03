@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
     const client = getOAuth2Client();
     const { tokens } = await client.getToken(code);
     saveToken(tokens);
-    return NextResponse.redirect(new URL("/", req.url));
+    return NextResponse.redirect(new URL("/?exportToSheets=1", req.url));
   } catch (err) {
     return NextResponse.json({ error: (err as Error).message }, { status: 500 });
   }

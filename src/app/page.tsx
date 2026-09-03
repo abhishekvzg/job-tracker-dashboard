@@ -8,7 +8,6 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { CHANNEL_OPTIONS, STATUS_OPTIONS, type JobApp } from "@/lib/types";
 import { fmtDate, fmtShort, statusStyle } from "@/lib/format";
 
-type AuthState = "loading" | "no-credentials" | "unauthenticated" | "authenticated";
 type SortKey = "company" | "status" | "date" | "channel";
 type SortDir = "asc" | "desc";
 
@@ -43,7 +42,6 @@ function monthNow() {
 }
 
 export default function Home() {
-  const [authState, setAuthState] = useState<AuthState>("loading");
   const [apps, setApps] = useState<JobApp[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,28 +62,13 @@ export default function Home() {
   const [form, setForm] = useState<AppFormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-
-  const checkAuth = useCallback(async () => {
-    try {
-      const res = await fetch("/api/auth/status");
-      const json = await res.json();
-      if (!json.hasCredentials) setAuthState("no-credentials");
-      else if (!json.authenticated) setAuthState("unauthenticated");
-      else setAuthState("authenticated");
-    } catch {
-      setError("Could not reach the server.");
-    }
-  }, []);
+  const [exportingSheets, setExportingSheets] = useState(false);
 
   const loadApps = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/sheet", { cache: "no-store" });
-      if (res.status === 401) {
-        setAuthState("unauthenticated");
-        return;
-      }
+      const res = await fetch("/api/applications", { cache: "no-store" });
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
         throw new Error(json.error || "Failed to load applications");
@@ -100,16 +83,37 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial auth check on mount
-    checkAuth();
-  }, [checkAuth]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load on mount
+    loadApps();
+  }, [loadApps]);
+
+  const exportToSheets = useCallback(async () => {
+    setExportingSheets(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/export/sheets", { method: "POST" });
+      if (res.status === 401) {
+        window.location.href = "/api/auth/google";
+        return;
+      }
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Export failed");
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setExportingSheets(false);
+    }
+  }, []);
 
   useEffect(() => {
-    if (authState === "authenticated") {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch sheet data once authenticated
-      loadApps();
-    }
-  }, [authState, loadApps]);
+    // Google OAuth callback redirects here with this flag once the user has connected;
+    // pick the export back up automatically instead of making them click twice.
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("exportToSheets")) return;
+    window.history.replaceState(null, "", window.location.pathname);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- resume export after OAuth redirect
+    exportToSheets();
+  }, [exportToSheets]);
 
   function openAddModal() {
     setForm(EMPTY_FORM);
@@ -146,12 +150,12 @@ export default function Home() {
         dateApplied: form.dateApplied,
       };
       const res = form.id
-        ? await fetch("/api/sheet", {
+        ? await fetch("/api/applications", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ id: form.id, ...payload }),
           })
-        : await fetch("/api/sheet", {
+        : await fetch("/api/applications", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
@@ -170,13 +174,13 @@ export default function Home() {
   }
 
   async function deleteApp(app: JobApp) {
-    if (!window.confirm(`Delete the application for "${app.company}"? This removes the row from your Google Sheet.`)) {
+    if (!window.confirm(`Delete the application for "${app.company}"? This removes it from your tracker.`)) {
       return;
     }
     setDeletingId(app.id);
     setError(null);
     try {
-      const res = await fetch(`/api/sheet?id=${encodeURIComponent(app.id)}`, { method: "DELETE" });
+      const res = await fetch(`/api/applications?id=${encodeURIComponent(app.id)}`, { method: "DELETE" });
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
         throw new Error(json.error || "Delete failed");
@@ -233,7 +237,7 @@ export default function Home() {
     setStatusSavingId(app.id);
     setError(null);
     try {
-      const res = await fetch("/api/sheet", {
+      const res = await fetch("/api/applications", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -288,34 +292,7 @@ export default function Home() {
     setCalendarMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
   }
 
-  if (authState === "loading") return <Center>Loading…</Center>;
-
-  if (authState === "no-credentials") {
-    return (
-      <Center>
-        <p className="max-w-sm text-center text-sm text-neutral-600 dark:text-neutral-400">
-          Missing{" "}
-          <code className="rounded bg-neutral-100 px-1 py-0.5 text-neutral-800 dark:bg-neutral-800 dark:text-neutral-200">
-            credentials.json
-          </code>{" "}
-          in the project root.
-        </p>
-      </Center>
-    );
-  }
-
-  if (authState === "unauthenticated") {
-    return (
-      <Center>
-        <a
-          href="/api/auth/google"
-          className="rounded bg-orange-600 px-4 py-2 text-sm font-bold text-white hover:bg-orange-700"
-        >
-          Connect Google Sheets
-        </a>
-      </Center>
-    );
-  }
+  if (loading && apps.length === 0) return <Center>Loading…</Center>;
 
   const dateRangeLabel = !dateFrom ? "Date range" : dateTo ? `${fmtShort(dateFrom)} – ${fmtShort(dateTo)}` : `${fmtShort(dateFrom)} – …`;
 
@@ -336,6 +313,19 @@ export default function Home() {
             className="rounded-lg border border-neutral-300 bg-white px-3.5 py-2 text-sm font-bold text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
           >
             {loading ? "Refreshing…" : "Refresh"}
+          </button>
+          <a
+            href="/api/export/xlsx"
+            className="rounded-lg border border-neutral-300 bg-white px-3.5 py-2 text-sm font-bold text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+          >
+            Download Excel
+          </a>
+          <button
+            onClick={exportToSheets}
+            disabled={exportingSheets}
+            className="rounded-lg border border-neutral-300 bg-white px-3.5 py-2 text-sm font-bold text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+          >
+            {exportingSheets ? "Exporting…" : "Export to Google Sheets"}
           </button>
           <button
             onClick={openAddModal}

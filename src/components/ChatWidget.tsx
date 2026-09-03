@@ -69,11 +69,7 @@ export function ChatWidget({ onApplied }: { onApplied: () => void }) {
       const json = await res.json();
       if (!res.ok) {
         const hint =
-          res.status === 501
-            ? " Add a GEMINI_API_KEY to .env.local and restart the dev server to enable this."
-            : res.status === 401
-              ? " Your Google Sheets connection expired — refresh the page and click Connect Google Sheets."
-              : "";
+          res.status === 501 ? " Add a GEMINI_API_KEY to .env.local and restart the dev server to enable this." : "";
         addMessage({ role: "error", text: (json.error || "Something went wrong.") + hint });
         return;
       }
@@ -108,12 +104,11 @@ export function ChatWidget({ onApplied }: { onApplied: () => void }) {
       });
       const json = await res.json();
       if (!res.ok) {
-        const hint = res.status === 401 ? " Your Google Sheets connection expired — refresh the page and click Connect Google Sheets." : "";
-        addMessage({ role: "error", text: (json.error || "Failed to apply the change.") + hint });
+        addMessage({ role: "error", text: json.error || "Failed to apply the change." });
         return;
       }
       setMessages((m) => m.map((msg) => (msg.id === msgId ? { ...msg, resolution: "applied" } : msg)));
-      addMessage({ role: "assistant", text: "Done — saved to your sheet. ✅" });
+      addMessage({ role: "assistant", text: "Done — saved to your tracker. ✅" });
       onApplied();
     } catch {
       addMessage({ role: "error", text: "Could not reach the server." });

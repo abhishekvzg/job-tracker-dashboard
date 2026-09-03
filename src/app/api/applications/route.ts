@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createApp, deleteApp, listApps, updateApp, type JobApp } from "@/lib/sheets";
+import { createApp, deleteApp, listApps, updateApp, type JobApp } from "@/lib/db";
 
 function statusFor(message: string) {
-  if (message === "NOT_AUTHENTICATED" || message === "MISSING_CREDENTIALS") return 401;
   if (message === "NOT_FOUND") return 404;
   return 500;
 }
