@@ -17,10 +17,12 @@ export const auth = betterAuth({
       loginPage: "/sign-in",
       consentPage: "/consent",
       resource: MCP_RESOURCE,
-      // Only a logged-in session (the app owner) can register a client — no open
-      // self-registration. Used once, by scripts/register-mcp-client.ts, to mint a
-      // stable client_id/secret pasted into claude.ai's "Advanced settings".
+      // claude.ai's connector UI never collects a pre-registered client_id/secret —
+      // it expects to self-register via RFC 7591 before the user ever signs in, so
+      // registration has to be open. Registering grants nothing on its own: issuing a
+      // token still requires signing in, and sign-up is restricted to OWNER_EMAIL.
       allowDynamicClientRegistration: true,
+      allowUnauthenticatedClientRegistration: true,
     }),
     nextCookies(),
   ],
