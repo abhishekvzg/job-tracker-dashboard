@@ -1,26 +1,35 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { DateRangeCalendar } from "@/components/DateRangeCalendar";
 import { AppFormModal, type AppFormState } from "@/components/AppFormModal";
 import { ChatWidget } from "@/components/ChatWidget";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { CHANNEL_OPTIONS, STATUS_OPTIONS, type JobApp } from "@/lib/types";
+import {
+  CHANNEL_OPTIONS,
+  NEXT_STATUSES,
+  STATUS_OPTIONS,
+  primaryContact,
+  type Contact,
+  type JobApp,
+} from "@/lib/types";
 import { fmtDate, fmtShort, statusStyle } from "@/lib/format";
 
-type SortKey = "company" | "status" | "date" | "channel";
+type SortKey = "company" | "status" | "date" | "channel" | "poc";
 type SortDir = "asc" | "desc";
 
 const EMPTY_FORM: AppFormState = {
   id: null,
   company: "",
   url: "",
-  status: "Applied",
+  status: "New",
   channel: "",
-  poc: "",
   remarks: "",
   extra: "",
   dateApplied: "",
+  contactIds: [],
+  primaryContactId: null,
 };
 
 const QUOTES = [
@@ -62,7 +71,7 @@ export default function Home() {
   const [form, setForm] = useState<AppFormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [exportingSheets, setExportingSheets] = useState(false);
+  const [contacts, setContacts] = useState<Contact[]>([]);
 
   const loadApps = useCallback(async () => {
     setLoading(true);
@@ -82,38 +91,21 @@ export default function Home() {
     }
   }, []);
 
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load on mount
-    loadApps();
-  }, [loadApps]);
-
-  const exportToSheets = useCallback(async () => {
-    setExportingSheets(true);
-    setError(null);
+  const loadContacts = useCallback(async () => {
     try {
-      const res = await fetch("/api/export/sheets", { method: "POST" });
-      if (res.status === 401) {
-        window.location.href = "/api/auth/google";
-        return;
-      }
+      const res = await fetch("/api/contacts", { cache: "no-store" });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Export failed");
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setExportingSheets(false);
+      if (res.ok) setContacts(json.contacts as Contact[]);
+    } catch {
+      // Contacts are supporting data — a failure here shouldn't block the table.
     }
   }, []);
 
   useEffect(() => {
-    // Google OAuth callback redirects here with this flag once the user has connected;
-    // pick the export back up automatically instead of making them click twice.
-    const params = new URLSearchParams(window.location.search);
-    if (!params.has("exportToSheets")) return;
-    window.history.replaceState(null, "", window.location.pathname);
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- resume export after OAuth redirect
-    exportToSheets();
-  }, [exportToSheets]);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load on mount
+    loadApps();
+    loadContacts();
+  }, [loadApps, loadContacts]);
 
   function openAddModal() {
     setForm(EMPTY_FORM);
@@ -121,7 +113,18 @@ export default function Home() {
   }
 
   function openEditModal(app: JobApp) {
-    setForm({ ...app });
+    setForm({
+      id: app.id,
+      company: app.company,
+      url: app.url,
+      status: app.status,
+      channel: app.channel,
+      remarks: app.remarks,
+      extra: app.extra,
+      dateApplied: app.dateApplied,
+      contactIds: app.contacts.map((c) => c.id),
+      primaryContactId: primaryContact(app)?.id ?? null,
+    });
     setModalOpen(true);
   }
 
@@ -134,6 +137,10 @@ export default function Home() {
     setForm((f) => ({ ...f, [field]: value }));
   }
 
+  function updateFormContacts(contactIds: string[], primaryContactId: string | null) {
+    setForm((f) => ({ ...f, contactIds, primaryContactId }));
+  }
+
   async function saveForm() {
     if (!form.company.trim()) return;
     setSaving(true);
@@ -144,10 +151,11 @@ export default function Home() {
         url: form.url,
         status: form.status,
         channel: form.channel,
-        poc: form.poc,
         remarks: form.remarks,
         extra: form.extra,
         dateApplied: form.dateApplied,
+        contactIds: form.contactIds,
+        primaryContactId: form.primaryContactId,
       };
       const res = form.id
         ? await fetch("/api/applications", {
@@ -204,7 +212,9 @@ export default function Home() {
   const filteredApps = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = apps.filter((a) => {
-      if (q && !a.company.toLowerCase().includes(q)) return false;
+      // Search matches the company or anyone attached to it.
+      if (q && !a.company.toLowerCase().includes(q) && !a.contacts.some((c) => c.name.toLowerCase().includes(q)))
+        return false;
       if (filterStatus !== "All" && a.status !== filterStatus) return false;
       if (filterChannel !== "All" && (a.channel || "") !== filterChannel) return false;
       if (dateFrom && (!a.dateApplied || a.dateApplied < dateFrom)) return false;
@@ -215,8 +225,10 @@ export default function Home() {
     return list.slice().sort((a, b) => {
       let cmp = 0;
       if (sortKey === "company") cmp = a.company.localeCompare(b.company);
-      else if (sortKey === "status") cmp = a.status.localeCompare(b.status);
+      else if (sortKey === "status") cmp = STATUS_OPTIONS.indexOf(a.status as never) - STATUS_OPTIONS.indexOf(b.status as never);
       else if (sortKey === "channel") cmp = (a.channel || "").localeCompare(b.channel || "");
+      else if (sortKey === "poc")
+        cmp = (primaryContact(a)?.name || "").localeCompare(primaryContact(b)?.name || "");
       else cmp = (a.dateApplied || "").localeCompare(b.dateApplied || "");
       if (cmp === 0) cmp = a.company.localeCompare(b.company);
       return cmp * dir;
@@ -246,10 +258,11 @@ export default function Home() {
           url: app.url,
           status,
           channel: app.channel,
-          poc: app.poc,
           remarks: app.remarks,
           extra: app.extra,
           dateApplied: app.dateApplied,
+          contactIds: app.contacts.map((c) => c.id),
+          primaryContactId: primaryContact(app)?.id ?? null,
         }),
       });
       if (!res.ok) {
@@ -264,12 +277,11 @@ export default function Home() {
     }
   }
 
-  const todayStr = new Date().toISOString().slice(0, 10);
   const kpis = [
     { label: "Total Applications", value: apps.length },
-    { label: "Applied Today", value: apps.filter((a) => a.dateApplied === todayStr).length },
-    { label: "In Interview", value: apps.filter((a) => a.status === "Interview").length },
-    { label: "Not Yet Applied", value: apps.filter((a) => a.status === "Not Applied").length },
+    { label: "Not Yet Applied", value: apps.filter((a) => a.status === "New").length },
+    { label: "In Progress", value: apps.filter((a) => a.status === "HR Call" || a.status === "Interview").length },
+    { label: "Offers", value: apps.filter((a) => a.status === "Job Offered").length },
   ];
 
   function selectCalendarDay(dateStr: string) {
@@ -320,13 +332,12 @@ export default function Home() {
           >
             Download Excel
           </a>
-          <button
-            onClick={exportToSheets}
-            disabled={exportingSheets}
-            className="rounded-lg border border-neutral-300 bg-white px-3.5 py-2 text-sm font-bold text-neutral-700 hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
+          <Link
+            href="/contacts"
+            className="rounded-lg border border-neutral-300 bg-white px-3.5 py-2 text-sm font-bold text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 dark:hover:bg-neutral-700"
           >
-            {exportingSheets ? "Exporting…" : "Export to Google Sheets"}
-          </button>
+            Contacts
+          </Link>
           <button
             onClick={openAddModal}
             className="flex items-center gap-2 rounded-xl bg-orange-600 px-5 py-3 text-[15px] font-extrabold text-white shadow-[0_6px_16px_rgba(234,88,12,0.28)] hover:bg-orange-700"
@@ -431,12 +442,13 @@ export default function Home() {
 
       {/* Applications list */}
       <div className="overflow-x-auto rounded-2xl border border-black/8 bg-white shadow-[0_1px_2px_rgba(31,26,23,0.03)] dark:border-white/10 dark:bg-neutral-900 dark:shadow-none">
-        <table className="w-full min-w-[560px] border-collapse text-left">
+        <table className="w-full min-w-[680px] border-collapse text-left">
           <thead>
             <tr className="border-b border-black/8 dark:border-white/10">
               {(
                 [
                   ["company", "Company"],
+                  ["poc", "Point of contact"],
                   ["status", "Status"],
                   ["date", "Date applied"],
                   ["channel", "Channel"],
@@ -500,7 +512,16 @@ export default function Home() {
       </div>
 
       {modalOpen && (
-        <AppFormModal form={form} saving={saving} onChange={updateForm} onCancel={closeModal} onSave={saveForm} />
+        <AppFormModal
+          form={form}
+          saving={saving}
+          contacts={contacts}
+          onChange={updateForm}
+          onContactsChange={updateFormContacts}
+          onContactCreated={(c) => setContacts((prev) => [...prev, c].sort((a, b) => a.name.localeCompare(b.name)))}
+          onCancel={closeModal}
+          onSave={saveForm}
+        />
       )}
 
       <ChatWidget onApplied={loadApps} />
@@ -533,6 +554,8 @@ function FragmentRow({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const poc = primaryContact(app);
+  const suggested = NEXT_STATUSES[app.status] ?? [];
   return (
     <>
       <tr
@@ -542,6 +565,20 @@ function FragmentRow({
         }`}
       >
         <td className="px-4 py-3 text-[14.5px] font-extrabold">{app.company}</td>
+        <td className="px-4 py-3 text-[13.5px]">
+          {poc ? (
+            <div className="flex items-baseline gap-1.5">
+              <span className="font-bold text-neutral-800 dark:text-neutral-200">{poc.name}</span>
+              {app.contacts.length > 1 && (
+                <span className="text-[11.5px] font-bold text-neutral-400 dark:text-neutral-500">
+                  +{app.contacts.length - 1}
+                </span>
+              )}
+            </div>
+          ) : (
+            <span className="text-neutral-400 dark:text-neutral-600">—</span>
+          )}
+        </td>
         <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
           <select
             value={app.status}
@@ -557,7 +594,7 @@ function FragmentRow({
           >
             {STATUS_OPTIONS.map((s) => (
               <option key={s} value={s}>
-                {s}
+                {suggested.includes(s) ? `→ ${s}` : s}
               </option>
             ))}
           </select>
@@ -572,7 +609,7 @@ function FragmentRow({
       </tr>
       {expanded && (
         <tr className="border-b border-black/5 bg-[#fdfcfb] dark:border-white/5 dark:bg-neutral-950/40">
-          <td colSpan={5} className="px-5 py-4">
+          <td colSpan={6} className="px-5 py-4">
             <div className="grid gap-x-8 gap-y-2.5 text-[13.5px] sm:grid-cols-2">
               <DetailField label="Listing URL">
                 {app.url ? (
@@ -589,8 +626,53 @@ function FragmentRow({
                   <Muted>None</Muted>
                 )}
               </DetailField>
-              <DetailField label="Point of contact">
-                {app.poc ? <span className="font-bold">{app.poc}</span> : <Muted>None saved</Muted>}
+              <DetailField label={app.contacts.length > 1 ? "Points of contact" : "Point of contact"}>
+                {app.contacts.length === 0 ? (
+                  <Muted>None saved</Muted>
+                ) : (
+                  <div className="flex flex-col gap-1.5">
+                    {app.contacts.map((c) => (
+                      <div key={c.id}>
+                        <div className="flex items-baseline gap-1.5">
+                          <span className="font-bold">{c.name}</span>
+                          {c.isPrimary && app.contacts.length > 1 && (
+                            <span className="rounded-full bg-orange-100 px-1.5 py-0.5 text-[10px] font-extrabold text-orange-700 dark:bg-orange-500/20 dark:text-orange-300">
+                              primary
+                            </span>
+                          )}
+                          {(c.role || c.company) && (
+                            <span className="text-[12px] font-semibold text-neutral-400 dark:text-neutral-500">
+                              {[c.role, c.company].filter(Boolean).join(" · ")}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-x-3 text-[12.5px] font-semibold">
+                          {c.email && (
+                            <a
+                              href={`mailto:${c.email}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-orange-700 hover:underline dark:text-orange-400"
+                            >
+                              {c.email}
+                            </a>
+                          )}
+                          {c.phone && <span className="text-neutral-500 dark:text-neutral-400">{c.phone}</span>}
+                          {c.linkedin && (
+                            <a
+                              href={c.linkedin}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              onClick={(e) => e.stopPropagation()}
+                              className="text-orange-700 hover:underline dark:text-orange-400"
+                            >
+                              LinkedIn ↗
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </DetailField>
               <DetailField label="Remarks">
                 {app.remarks ? (

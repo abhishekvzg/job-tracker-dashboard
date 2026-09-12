@@ -2,14 +2,39 @@ import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { listApps } from "@/lib/db";
 
-// Matches the header row of the Google Sheet this tracker used before migrating to Supabase.
-const HEADERS = ["ID", "Company", "application url", "Application Status", "Channel", "POC", "Remarks", "Column 1", "Date Applied"];
+const HEADERS = [
+  "ID",
+  "Company",
+  "Application URL",
+  "Status",
+  "Channel",
+  "Point of contact",
+  "Contact details",
+  "Remarks",
+  "Date Applied",
+];
+
+function contactDetails(app: Awaited<ReturnType<typeof listApps>>[number]) {
+  return app.contacts
+    .map((c) => [c.name, c.role, c.company, c.email, c.phone, c.linkedin].filter(Boolean).join(" | "))
+    .join("\n");
+}
 
 export async function GET() {
   const apps = await listApps();
   const rows = [
     HEADERS,
-    ...apps.map((a) => [a.id, a.company, a.url, a.status, a.channel, a.poc, a.remarks, a.extra, a.dateApplied]),
+    ...apps.map((a) => [
+      a.id,
+      a.company,
+      a.url,
+      a.status,
+      a.channel,
+      a.contacts.find((c) => c.isPrimary)?.name ?? a.contacts[0]?.name ?? "",
+      contactDetails(a),
+      a.remarks,
+      a.dateApplied,
+    ]),
   ];
 
   const sheet = XLSX.utils.aoa_to_sheet(rows);

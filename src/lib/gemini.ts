@@ -50,7 +50,7 @@ export async function interpretCommand(message: string, apps: JobApp[], history:
     apps
       .map(
         (a) =>
-          `id=${a.id} | company="${a.company}" | url="${a.url}" | status="${a.status}" | channel="${a.channel}" | poc="${a.poc}" | remarks="${a.remarks}" | dateApplied="${a.dateApplied}"`
+          `id=${a.id} | company="${a.company}" | url="${a.url}" | status="${a.status}" | channel="${a.channel}" | poc="${a.contacts.map((c) => c.name).join(", ")}" | remarks="${a.remarks}" | dateApplied="${a.dateApplied}"`
       )
       .join("\n") || "(no applications tracked yet)";
 

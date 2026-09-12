@@ -3,7 +3,15 @@ import type { McpServer } from "@modelcontextprotocol/server";
 import { requireMcpAuth } from "@better-auth/mcp";
 import { z } from "zod";
 import { auth, MCP_RESOURCE } from "@/lib/auth";
-import { createApp, deleteApp, listApps, updateApp } from "@/lib/db";
+import {
+  createApp,
+  createContact,
+  deleteApp,
+  findOrCreateContactByName,
+  listApps,
+  listContacts,
+  updateApp,
+} from "@/lib/db";
 import { STATUS_OPTIONS } from "@/lib/types";
 import { resolveApp, type ResolveResult } from "@/lib/mcpResolve";
 
@@ -70,15 +78,19 @@ const mcpServerHandler = createMcpHandler(
         }),
       },
       async ({ company, url, status, channel, poc, remarks, dateApplied }) => {
+        // A name here is matched against saved contacts and created if new, so callers
+        // can keep passing a plain name without knowing about contact ids.
+        const contact = poc?.trim() ? await findOrCreateContactByName(poc, company) : null;
         const app = await createApp({
           company,
           url: url ?? "",
           status: status ?? "Applied",
           channel: channel ?? "",
-          poc: poc ?? "",
           remarks: remarks ?? "",
           extra: "",
           dateApplied: dateApplied ?? new Date().toISOString().slice(0, 10),
+          contactIds: contact ? [contact.id] : [],
+          primaryContactId: contact?.id ?? null,
         });
         return toolResult({ added: app });
       }
@@ -106,15 +118,25 @@ const mcpServerHandler = createMcpHandler(
         const resolved = await resolveApp({ id, company });
         if (resolved.status !== "found") return unresolved(resolved);
         const current = resolved.app;
+
+        let contactIds = current.contacts.map((c) => c.id);
+        let primaryContactId = current.contacts.find((c) => c.isPrimary)?.id ?? contactIds[0] ?? null;
+        if (poc?.trim()) {
+          const contact = await findOrCreateContactByName(poc, current.company);
+          if (!contactIds.includes(contact.id)) contactIds = [...contactIds, contact.id];
+          primaryContactId = contact.id;
+        }
+
         await updateApp(current.id, {
           company: newCompany ?? current.company,
           url: url ?? current.url,
           status: status ?? current.status,
           channel: channel ?? current.channel,
-          poc: poc ?? current.poc,
           remarks: remarks ?? current.remarks,
           extra: current.extra,
           dateApplied: dateApplied ?? current.dateApplied,
+          contactIds,
+          primaryContactId,
         });
         return toolResult({ updated: current.id });
       }
@@ -133,6 +155,46 @@ const mcpServerHandler = createMcpHandler(
         await deleteApp(resolved.app.id);
         return toolResult({ deleted: resolved.app.id });
       }
+    );
+
+    server.registerTool(
+      "list_contacts",
+      {
+        title: "List saved contacts",
+        description: "List every saved person (recruiters, referrers, hiring managers) with their details.",
+        inputSchema: z.object({}),
+      },
+      async () => toolResult(await listContacts())
+    );
+
+    server.registerTool(
+      "add_contact",
+      {
+        title: "Add a contact",
+        description:
+          "Save a new person. Use this when the user shares someone's details; attach them to an application with add_application/update_application's poc field.",
+        inputSchema: z.object({
+          name: z.string(),
+          role: z.string().optional(),
+          company: z.string().optional(),
+          email: z.string().optional(),
+          phone: z.string().optional(),
+          linkedin: z.string().optional(),
+          notes: z.string().optional(),
+        }),
+      },
+      async ({ name, role, company, email, phone, linkedin, notes }) =>
+        toolResult({
+          added: await createContact({
+            name,
+            role: role ?? "",
+            company: company ?? "",
+            email: email ?? "",
+            phone: phone ?? "",
+            linkedin: linkedin ?? "",
+            notes: notes ?? "",
+          }),
+        })
     );
   },
   { serverInfo: { name: "job-tracker-dashboard", version: "1.0.0" } }

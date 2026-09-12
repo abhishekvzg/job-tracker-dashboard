@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { interpretCommand, type ChatAction, type ChatTurn } from "@/lib/gemini";
-import { createApp, deleteApp, getApp, listApps, updateApp } from "@/lib/db";
+import { createApp, deleteApp, findOrCreateContactByName, getApp, listApps, updateApp } from "@/lib/db";
 
 function statusFor(message: string) {
   if (message === "MISSING_GEMINI_KEY") return 501;
@@ -39,15 +39,18 @@ export async function POST(req: NextRequest) {
         if (!action.company.trim()) {
           return NextResponse.json({ error: "Missing company name" }, { status: 400 });
         }
+        // A person named in chat is matched to a saved contact, or saved as a new one.
+        const contact = action.poc.trim() ? await findOrCreateContactByName(action.poc, action.company) : null;
         const app = await createApp({
           company: action.company,
           url: action.url,
           status: action.status,
           channel: action.channel,
-          poc: action.poc,
           remarks: action.remarks,
           extra: "",
           dateApplied: action.dateApplied,
+          contactIds: contact ? [contact.id] : [],
+          primaryContactId: contact?.id ?? null,
         });
         return NextResponse.json({ applied: true, app });
       }
@@ -55,15 +58,25 @@ export async function POST(req: NextRequest) {
       if (action.intent === "update") {
         const current = await getApp(action.id);
         if (!current) return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
+
+        let contactIds = current.contacts.map((c) => c.id);
+        let primaryContactId = current.contacts.find((c) => c.isPrimary)?.id ?? contactIds[0] ?? null;
+        if (action.poc.trim()) {
+          const contact = await findOrCreateContactByName(action.poc, current.company);
+          if (!contactIds.includes(contact.id)) contactIds = [...contactIds, contact.id];
+          primaryContactId = contact.id;
+        }
+
         await updateApp(action.id, {
           company: action.company,
           url: action.url,
           status: action.status,
           channel: action.channel,
-          poc: action.poc,
           remarks: action.remarks,
           extra: current.extra,
           dateApplied: action.dateApplied,
+          contactIds,
+          primaryContactId,
         });
         return NextResponse.json({ applied: true });
       }

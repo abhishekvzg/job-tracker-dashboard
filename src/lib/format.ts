@@ -1,10 +1,10 @@
 export const STATUS_STYLES: Record<string, string> = {
+  New: "bg-stone-100 text-stone-500 dark:bg-neutral-500/15 dark:text-neutral-300",
   Applied: "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
-  "Not Applied": "bg-stone-100 text-stone-500 dark:bg-neutral-500/15 dark:text-neutral-300",
+  "HR Call": "bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300",
   Interview: "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300",
-  Offer: "bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
   Rejected: "bg-red-50 text-red-700 dark:bg-red-500/15 dark:text-red-300",
-  Ghosted: "bg-purple-50 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300",
+  "Job Offered": "bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
 };
 
 export function statusStyle(status: string): string {
