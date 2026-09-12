@@ -21,8 +21,11 @@ export default function ConsentPage() {
       });
       const json = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(json.message || json.error || "Could not record consent");
-      if (json.redirect_uri) {
-        window.location.href = json.redirect_uri;
+      // Better Auth answers with {redirect: true, url}; its OpenAPI schema advertises
+      // redirect_uri, so accept either rather than trusting the documented shape.
+      const target = json.url || json.redirect_uri;
+      if (target) {
+        window.location.href = target;
       } else {
         setError("No redirect returned — close this tab and try connecting again.");
         setSubmitting(null);
