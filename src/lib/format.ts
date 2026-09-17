@@ -7,6 +7,22 @@ export const STATUS_STYLES: Record<string, string> = {
   "Job Offered": "bg-amber-50 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
 };
 
+/**
+ * Today's date as YYYY-MM-DD in the tracker's own timezone. Server code runs in UTC
+ * on Vercel, so `new Date().toISOString()` reports yesterday for most of the evening
+ * in IST — which silently back-dated entries.
+ */
+export const TRACKER_TIME_ZONE = "Asia/Kolkata";
+
+export function todayISO(): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: TRACKER_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 export function statusStyle(status: string): string {
   return STATUS_STYLES[status] ?? "bg-stone-100 text-stone-500 dark:bg-neutral-500/15 dark:text-neutral-300";
 }

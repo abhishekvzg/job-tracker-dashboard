@@ -5,18 +5,24 @@ import { z } from "zod";
 import { auth, MCP_RESOURCE } from "@/lib/auth";
 import {
   createApp,
-  createContact,
   deleteApp,
-  findOrCreateContactByName,
+  deleteContact,
+  findContactByName,
   listApps,
   listContacts,
   updateApp,
+  upsertContactByName,
 } from "@/lib/db";
-import { STATUS_OPTIONS } from "@/lib/types";
+import { MAX_CONTACTS_PER_APPLICATION, STATUS_OPTIONS } from "@/lib/types";
 import { resolveApp, type ResolveResult } from "@/lib/mcpResolve";
+import { todayISO } from "@/lib/format";
 
 function toolResult(payload: unknown) {
-  return { content: [{ type: "text" as const, text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2) }] };
+  return {
+    content: [
+      { type: "text" as const, text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2) },
+    ],
+  };
 }
 
 function unresolved(result: Exclude<ResolveResult, { status: "found" }>) {
@@ -27,13 +33,23 @@ function unresolved(result: Exclude<ResolveResult, { status: "found" }>) {
   });
 }
 
+const personShape = {
+  name: z.string().describe("The person's name."),
+  role: z.string().optional().describe("Their job title, e.g. 'Recruiter' or 'Hiring Manager'."),
+  email: z.string().optional(),
+  phone: z.string().optional(),
+  linkedin: z.string().optional(),
+  notes: z.string().optional().describe("Context: how you know them, what was discussed."),
+  lastContacted: z.string().optional().describe("YYYY-MM-DD of the last time the user reached out."),
+};
+
 const mcpServerHandler = createMcpHandler(
   (server: McpServer) => {
     server.registerTool(
       "list_applications",
       {
         title: "List job applications",
-        description: "List tracked job applications, optionally filtered by status and/or channel.",
+        description: "List tracked job applications with their points of contact, optionally filtered.",
         inputSchema: z.object({
           status: z.enum(STATUS_OPTIONS).optional(),
           channel: z.string().optional(),
@@ -41,10 +57,11 @@ const mcpServerHandler = createMcpHandler(
       },
       async ({ status, channel }) => {
         const apps = await listApps();
-        const filtered = apps.filter(
-          (a) => (!status || a.status === status) && (!channel || a.channel.toLowerCase() === channel.toLowerCase())
+        return toolResult(
+          apps.filter(
+            (a) => (!status || a.status === status) && (!channel || a.channel.toLowerCase() === channel.toLowerCase())
+          )
         );
-        return toolResult(filtered);
       }
     );
 
@@ -66,21 +83,21 @@ const mcpServerHandler = createMcpHandler(
       "add_application",
       {
         title: "Add a job application",
-        description: "Add a new job application to the tracker.",
+        description: "Add a new job application. Points of contact can be included in the same call.",
         inputSchema: z.object({
           company: z.string(),
           url: z.string().optional(),
           status: z.enum(STATUS_OPTIONS).optional(),
           channel: z.string().optional(),
-          poc: z.string().optional(),
           remarks: z.string().optional(),
           dateApplied: z.string().optional(),
+          contacts: z
+            .array(z.object(personShape))
+            .optional()
+            .describe(`People at this company, up to ${MAX_CONTACTS_PER_APPLICATION}.`),
         }),
       },
-      async ({ company, url, status, channel, poc, remarks, dateApplied }) => {
-        // A name here is matched against saved contacts and created if new, so callers
-        // can keep passing a plain name without knowing about contact ids.
-        const contact = poc?.trim() ? await findOrCreateContactByName(poc, company) : null;
+      async ({ company, url, status, channel, remarks, dateApplied, contacts }) => {
         const app = await createApp({
           company,
           url: url ?? "",
@@ -88,11 +105,13 @@ const mcpServerHandler = createMcpHandler(
           channel: channel ?? "",
           remarks: remarks ?? "",
           extra: "",
-          dateApplied: dateApplied ?? new Date().toISOString().slice(0, 10),
-          contactIds: contact ? [contact.id] : [],
-          primaryContactId: contact?.id ?? null,
+          dateApplied: dateApplied ?? todayISO(),
         });
-        return toolResult({ added: app });
+        for (const person of contacts ?? []) {
+          await upsertContactByName(app.id, person.name, person);
+        }
+        const [fresh] = (await listApps()).filter((a) => a.id === app.id);
+        return toolResult({ added: fresh ?? app });
       }
     );
 
@@ -101,7 +120,7 @@ const mcpServerHandler = createMcpHandler(
       {
         title: "Update a job application",
         description:
-          "Update fields on an existing application (e.g. change status). Identify it by id, or by company name (fuzzy match) if id is unknown.",
+          "Update an existing application (e.g. change status). Identify it by id, or by company name (fuzzy match).",
         inputSchema: z.object({
           id: z.string().optional(),
           company: z.string().optional(),
@@ -109,24 +128,14 @@ const mcpServerHandler = createMcpHandler(
           status: z.enum(STATUS_OPTIONS).optional(),
           url: z.string().optional(),
           channel: z.string().optional(),
-          poc: z.string().optional(),
           remarks: z.string().optional(),
           dateApplied: z.string().optional(),
         }),
       },
-      async ({ id, company, newCompany, status, url, channel, poc, remarks, dateApplied }) => {
+      async ({ id, company, newCompany, status, url, channel, remarks, dateApplied }) => {
         const resolved = await resolveApp({ id, company });
         if (resolved.status !== "found") return unresolved(resolved);
         const current = resolved.app;
-
-        let contactIds = current.contacts.map((c) => c.id);
-        let primaryContactId = current.contacts.find((c) => c.isPrimary)?.id ?? contactIds[0] ?? null;
-        if (poc?.trim()) {
-          const contact = await findOrCreateContactByName(poc, current.company);
-          if (!contactIds.includes(contact.id)) contactIds = [...contactIds, contact.id];
-          primaryContactId = contact.id;
-        }
-
         await updateApp(current.id, {
           company: newCompany ?? current.company,
           url: url ?? current.url,
@@ -135,8 +144,6 @@ const mcpServerHandler = createMcpHandler(
           remarks: remarks ?? current.remarks,
           extra: current.extra,
           dateApplied: dateApplied ?? current.dateApplied,
-          contactIds,
-          primaryContactId,
         });
         return toolResult({ updated: current.id });
       }
@@ -146,7 +153,7 @@ const mcpServerHandler = createMcpHandler(
       "delete_application",
       {
         title: "Delete a job application",
-        description: "Delete an application from the tracker. Identify it by id, or by company name (fuzzy match).",
+        description: "Delete an application and its points of contact. Identify by id or company name.",
         inputSchema: z.object({ id: z.string().optional(), company: z.string().optional() }),
       },
       async ({ id, company }) => {
@@ -158,43 +165,85 @@ const mcpServerHandler = createMcpHandler(
     );
 
     server.registerTool(
-      "list_contacts",
+      "save_contacts",
       {
-        title: "List saved contacts",
-        description: "List every saved person (recruiters, referrers, hiring managers) with their details.",
-        inputSchema: z.object({}),
+        title: "Save points of contact for a company",
+        description:
+          "Add or update one or more people at a company, in a single call. Use this whenever the user mentions " +
+          "reaching out to someone — pass everything they said about each person. Anyone already saved at that " +
+          "company under the same name is updated in place rather than duplicated; fields you omit keep their " +
+          "existing values. A person belongs to exactly one company. Set lastContacted (or markContactedToday) " +
+          "when the user says they emailed or spoke to them.",
+        inputSchema: z.object({
+          company: z.string().describe("Company name — fuzzy matched against tracked applications."),
+          contacts: z.array(z.object(personShape)).min(1),
+          markContactedToday: z
+            .boolean()
+            .optional()
+            .describe("Stamp today's date as lastContacted for every person in this call."),
+        }),
       },
-      async () => toolResult(await listContacts())
+      async ({ company, contacts, markContactedToday }) => {
+        const resolved = await resolveApp({ company });
+        if (resolved.status !== "found") return unresolved(resolved);
+
+        const existing = await listContacts(resolved.app.id);
+        const names = new Set(existing.map((c) => c.name.toLowerCase()));
+        const incomingNew = contacts.filter((p) => !names.has(p.name.trim().toLowerCase())).length;
+        if (existing.length + incomingNew > MAX_CONTACTS_PER_APPLICATION) {
+          return toolResult({
+            error: `${resolved.app.company} already has ${existing.length} of a maximum ${MAX_CONTACTS_PER_APPLICATION} contacts; that call would add ${incomingNew} more.`,
+          });
+        }
+
+        const saved = [];
+        for (const person of contacts) {
+          saved.push(
+            await upsertContactByName(resolved.app.id, person.name, {
+              ...person,
+              lastContacted: markContactedToday ? todayISO() : person.lastContacted,
+            })
+          );
+        }
+        return toolResult({ company: resolved.app.company, saved });
+      }
     );
 
     server.registerTool(
-      "add_contact",
+      "list_contacts",
       {
-        title: "Add a contact",
-        description:
-          "Save a new person. Use this when the user shares someone's details; attach them to an application with add_application/update_application's poc field.",
-        inputSchema: z.object({
-          name: z.string(),
-          role: z.string().optional(),
-          company: z.string().optional(),
-          email: z.string().optional(),
-          phone: z.string().optional(),
-          linkedin: z.string().optional(),
-          notes: z.string().optional(),
-        }),
+        title: "List points of contact",
+        description: "List saved people, either across the whole tracker or for one company.",
+        inputSchema: z.object({ company: z.string().optional() }),
       },
-      async ({ name, role, company, email, phone, linkedin, notes }) =>
-        toolResult({
-          added: await createContact({
-            name,
-            role: role ?? "",
-            company: company ?? "",
-            email: email ?? "",
-            phone: phone ?? "",
-            linkedin: linkedin ?? "",
-            notes: notes ?? "",
-          }),
-        })
+      async ({ company }) => {
+        if (!company) {
+          const apps = await listApps();
+          return toolResult(
+            apps.filter((a) => a.contacts.length > 0).map((a) => ({ company: a.company, contacts: a.contacts }))
+          );
+        }
+        const resolved = await resolveApp({ company });
+        if (resolved.status !== "found") return unresolved(resolved);
+        return toolResult({ company: resolved.app.company, contacts: resolved.app.contacts });
+      }
+    );
+
+    server.registerTool(
+      "delete_contact",
+      {
+        title: "Remove a point of contact",
+        description: "Remove one person from a company's application.",
+        inputSchema: z.object({ company: z.string(), name: z.string() }),
+      },
+      async ({ company, name }) => {
+        const resolved = await resolveApp({ company });
+        if (resolved.status !== "found") return unresolved(resolved);
+        const contact = await findContactByName(resolved.app.id, name);
+        if (!contact) return toolResult({ error: `No contact named "${name}" at ${resolved.app.company}.` });
+        await deleteContact(contact.id);
+        return toolResult({ removed: contact.name, from: resolved.app.company });
+      }
     );
   },
   { serverInfo: { name: "job-tracker-dashboard", version: "1.0.0" } }

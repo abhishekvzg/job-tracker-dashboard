@@ -6,17 +6,11 @@ import { DateRangeCalendar } from "@/components/DateRangeCalendar";
 import { AppFormModal, type AppFormState } from "@/components/AppFormModal";
 import { ChatWidget } from "@/components/ChatWidget";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import {
-  CHANNEL_OPTIONS,
-  NEXT_STATUSES,
-  STATUS_OPTIONS,
-  primaryContact,
-  type Contact,
-  type JobApp,
-} from "@/lib/types";
+import { CHANNEL_OPTIONS, NEXT_STATUSES, STATUS_OPTIONS, type JobApp } from "@/lib/types";
+import { ContactsPanel } from "@/components/ContactsPanel";
 import { fmtDate, fmtShort, statusStyle } from "@/lib/format";
 
-type SortKey = "company" | "status" | "date" | "channel" | "poc";
+type SortKey = "company" | "status" | "date" | "channel";
 type SortDir = "asc" | "desc";
 
 const EMPTY_FORM: AppFormState = {
@@ -28,8 +22,6 @@ const EMPTY_FORM: AppFormState = {
   remarks: "",
   extra: "",
   dateApplied: "",
-  contactIds: [],
-  primaryContactId: null,
 };
 
 const QUOTES = [
@@ -71,7 +63,6 @@ export default function Home() {
   const [form, setForm] = useState<AppFormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [contacts, setContacts] = useState<Contact[]>([]);
 
   const loadApps = useCallback(async () => {
     setLoading(true);
@@ -91,21 +82,10 @@ export default function Home() {
     }
   }, []);
 
-  const loadContacts = useCallback(async () => {
-    try {
-      const res = await fetch("/api/contacts", { cache: "no-store" });
-      const json = await res.json();
-      if (res.ok) setContacts(json.contacts as Contact[]);
-    } catch {
-      // Contacts are supporting data — a failure here shouldn't block the table.
-    }
-  }, []);
-
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- initial load on mount
     loadApps();
-    loadContacts();
-  }, [loadApps, loadContacts]);
+  }, [loadApps]);
 
   function openAddModal() {
     setForm(EMPTY_FORM);
@@ -122,8 +102,6 @@ export default function Home() {
       remarks: app.remarks,
       extra: app.extra,
       dateApplied: app.dateApplied,
-      contactIds: app.contacts.map((c) => c.id),
-      primaryContactId: primaryContact(app)?.id ?? null,
     });
     setModalOpen(true);
   }
@@ -135,10 +113,6 @@ export default function Home() {
 
   function updateForm(field: keyof AppFormState, value: string) {
     setForm((f) => ({ ...f, [field]: value }));
-  }
-
-  function updateFormContacts(contactIds: string[], primaryContactId: string | null) {
-    setForm((f) => ({ ...f, contactIds, primaryContactId }));
   }
 
   async function saveForm() {
@@ -154,8 +128,6 @@ export default function Home() {
         remarks: form.remarks,
         extra: form.extra,
         dateApplied: form.dateApplied,
-        contactIds: form.contactIds,
-        primaryContactId: form.primaryContactId,
       };
       const res = form.id
         ? await fetch("/api/applications", {
@@ -227,8 +199,6 @@ export default function Home() {
       if (sortKey === "company") cmp = a.company.localeCompare(b.company);
       else if (sortKey === "status") cmp = STATUS_OPTIONS.indexOf(a.status as never) - STATUS_OPTIONS.indexOf(b.status as never);
       else if (sortKey === "channel") cmp = (a.channel || "").localeCompare(b.channel || "");
-      else if (sortKey === "poc")
-        cmp = (primaryContact(a)?.name || "").localeCompare(primaryContact(b)?.name || "");
       else cmp = (a.dateApplied || "").localeCompare(b.dateApplied || "");
       if (cmp === 0) cmp = a.company.localeCompare(b.company);
       return cmp * dir;
@@ -261,8 +231,6 @@ export default function Home() {
           remarks: app.remarks,
           extra: app.extra,
           dateApplied: app.dateApplied,
-          contactIds: app.contacts.map((c) => c.id),
-          primaryContactId: primaryContact(app)?.id ?? null,
         }),
       });
       if (!res.ok) {
@@ -448,7 +416,6 @@ export default function Home() {
               {(
                 [
                   ["company", "Company"],
-                  ["poc", "Point of contact"],
                   ["status", "Status"],
                   ["date", "Date applied"],
                   ["channel", "Channel"],
@@ -483,6 +450,7 @@ export default function Home() {
                   onChangeStatus={(s) => changeStatus(app, s)}
                   onEdit={() => openEditModal(app)}
                   onDelete={() => deleteApp(app)}
+                  onContactsChanged={loadApps}
                 />
               );
             })}
@@ -512,16 +480,7 @@ export default function Home() {
       </div>
 
       {modalOpen && (
-        <AppFormModal
-          form={form}
-          saving={saving}
-          contacts={contacts}
-          onChange={updateForm}
-          onContactsChange={updateFormContacts}
-          onContactCreated={(c) => setContacts((prev) => [...prev, c].sort((a, b) => a.name.localeCompare(b.name)))}
-          onCancel={closeModal}
-          onSave={saveForm}
-        />
+        <AppFormModal form={form} saving={saving} onChange={updateForm} onCancel={closeModal} onSave={saveForm} />
       )}
 
       <ChatWidget onApplied={loadApps} />
@@ -544,6 +503,7 @@ function FragmentRow({
   onChangeStatus,
   onEdit,
   onDelete,
+  onContactsChanged,
 }: {
   app: JobApp;
   expanded: boolean;
@@ -553,8 +513,8 @@ function FragmentRow({
   onChangeStatus: (status: string) => void;
   onEdit: () => void;
   onDelete: () => void;
+  onContactsChanged: () => void;
 }) {
-  const poc = primaryContact(app);
   const suggested = NEXT_STATUSES[app.status] ?? [];
   return (
     <>
@@ -564,20 +524,18 @@ function FragmentRow({
           expanded ? "bg-orange-50/60 dark:bg-neutral-800/80" : ""
         }`}
       >
-        <td className="px-4 py-3 text-[14.5px] font-extrabold">{app.company}</td>
-        <td className="px-4 py-3 text-[13.5px]">
-          {poc ? (
-            <div className="flex items-baseline gap-1.5">
-              <span className="font-bold text-neutral-800 dark:text-neutral-200">{poc.name}</span>
-              {app.contacts.length > 1 && (
-                <span className="text-[11.5px] font-bold text-neutral-400 dark:text-neutral-500">
-                  +{app.contacts.length - 1}
-                </span>
-              )}
-            </div>
-          ) : (
-            <span className="text-neutral-400 dark:text-neutral-600">—</span>
-          )}
+        <td className="px-4 py-3 text-[14.5px] font-extrabold">
+          <div className="flex items-baseline gap-2">
+            {app.company}
+            {app.contacts.length > 0 && (
+              <span
+                title={`${app.contacts.length} point${app.contacts.length === 1 ? "" : "s"} of contact`}
+                className="rounded-full bg-neutral-100 px-1.5 py-0.5 text-[10.5px] font-extrabold text-neutral-500 dark:bg-neutral-800 dark:text-neutral-400"
+              >
+                {app.contacts.length} POC{app.contacts.length === 1 ? "" : "s"}
+              </span>
+            )}
+          </div>
         </td>
         <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
           <select
@@ -609,7 +567,7 @@ function FragmentRow({
       </tr>
       {expanded && (
         <tr className="border-b border-black/5 bg-[#fdfcfb] dark:border-white/5 dark:bg-neutral-950/40">
-          <td colSpan={6} className="px-5 py-4">
+          <td colSpan={5} className="px-5 py-4">
             <div className="grid gap-x-8 gap-y-2.5 text-[13.5px] sm:grid-cols-2">
               <DetailField label="Listing URL">
                 {app.url ? (
@@ -626,54 +584,6 @@ function FragmentRow({
                   <Muted>None</Muted>
                 )}
               </DetailField>
-              <DetailField label={app.contacts.length > 1 ? "Points of contact" : "Point of contact"}>
-                {app.contacts.length === 0 ? (
-                  <Muted>None saved</Muted>
-                ) : (
-                  <div className="flex flex-col gap-1.5">
-                    {app.contacts.map((c) => (
-                      <div key={c.id}>
-                        <div className="flex items-baseline gap-1.5">
-                          <span className="font-bold">{c.name}</span>
-                          {c.isPrimary && app.contacts.length > 1 && (
-                            <span className="rounded-full bg-orange-100 px-1.5 py-0.5 text-[10px] font-extrabold text-orange-700 dark:bg-orange-500/20 dark:text-orange-300">
-                              primary
-                            </span>
-                          )}
-                          {(c.role || c.company) && (
-                            <span className="text-[12px] font-semibold text-neutral-400 dark:text-neutral-500">
-                              {[c.role, c.company].filter(Boolean).join(" · ")}
-                            </span>
-                          )}
-                        </div>
-                        <div className="flex flex-wrap gap-x-3 text-[12.5px] font-semibold">
-                          {c.email && (
-                            <a
-                              href={`mailto:${c.email}`}
-                              onClick={(e) => e.stopPropagation()}
-                              className="text-orange-700 hover:underline dark:text-orange-400"
-                            >
-                              {c.email}
-                            </a>
-                          )}
-                          {c.phone && <span className="text-neutral-500 dark:text-neutral-400">{c.phone}</span>}
-                          {c.linkedin && (
-                            <a
-                              href={c.linkedin}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              className="text-orange-700 hover:underline dark:text-orange-400"
-                            >
-                              LinkedIn ↗
-                            </a>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </DetailField>
               <DetailField label="Remarks">
                 {app.remarks ? (
                   <span className="font-medium leading-snug text-neutral-700 dark:text-neutral-300">{app.remarks}</span>
@@ -687,6 +597,11 @@ function FragmentRow({
                 </DetailField>
               )}
             </div>
+
+            <div className="mt-4 border-t border-black/5 pt-3.5 dark:border-white/5">
+              <ContactsPanel applicationId={app.id} contacts={app.contacts} onChanged={onContactsChanged} />
+            </div>
+
             <div className="mt-4 flex flex-wrap gap-2">
               {app.url && (
                 <a

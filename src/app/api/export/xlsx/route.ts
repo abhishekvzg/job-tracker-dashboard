@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 import { listApps } from "@/lib/db";
+import { todayISO } from "@/lib/format";
 
 const HEADERS = [
   "ID",
@@ -8,7 +9,7 @@ const HEADERS = [
   "Application URL",
   "Status",
   "Channel",
-  "Point of contact",
+  "Points of contact",
   "Contact details",
   "Remarks",
   "Date Applied",
@@ -16,7 +17,11 @@ const HEADERS = [
 
 function contactDetails(app: Awaited<ReturnType<typeof listApps>>[number]) {
   return app.contacts
-    .map((c) => [c.name, c.role, c.company, c.email, c.phone, c.linkedin].filter(Boolean).join(" | "))
+    .map((c) =>
+      [c.name, c.role, c.email, c.phone, c.linkedin, c.lastContacted && `last contacted ${c.lastContacted}`]
+        .filter(Boolean)
+        .join(" | ")
+    )
     .join("\n");
 }
 
@@ -30,7 +35,7 @@ export async function GET() {
       a.url,
       a.status,
       a.channel,
-      a.contacts.find((c) => c.isPrimary)?.name ?? a.contacts[0]?.name ?? "",
+      a.contacts.map((c) => c.name).join(", "),
       contactDetails(a),
       a.remarks,
       a.dateApplied,
@@ -45,7 +50,7 @@ export async function GET() {
   return new NextResponse(new Uint8Array(buffer), {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename="job-applications-${new Date().toISOString().slice(0, 10)}.xlsx"`,
+      "Content-Disposition": `attachment; filename="job-applications-${todayISO()}.xlsx"`,
     },
   });
 }

@@ -1,4 +1,5 @@
 import { STATUS_OPTIONS, CHANNEL_OPTIONS, type JobApp } from "./types";
+import { todayISO } from "./format";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -45,7 +46,7 @@ export async function interpretCommand(message: string, apps: JobApp[], history:
     throw new Error("MISSING_GEMINI_KEY");
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayISO();
   const listing =
     apps
       .map(

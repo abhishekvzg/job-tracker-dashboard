@@ -10,13 +10,8 @@ function statusFor(message: string) {
 function isValidAppPayload(body: unknown): body is JobAppInput {
   if (!body || typeof body !== "object") return false;
   const b = body as Record<string, unknown>;
-  return (
-    ["company", "url", "status", "channel", "remarks", "extra", "dateApplied"].every(
-      (k) => typeof b[k] === "string"
-    ) &&
-    Array.isArray(b.contactIds) &&
-    (b.contactIds as unknown[]).every((c) => typeof c === "string") &&
-    (b.primaryContactId === null || typeof b.primaryContactId === "string")
+  return ["company", "url", "status", "channel", "remarks", "extra", "dateApplied"].every(
+    (k) => typeof b[k] === "string"
   );
 }
 

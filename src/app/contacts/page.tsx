@@ -1,43 +1,29 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import type { Contact } from "@/lib/types";
+import { fmtDate } from "@/lib/format";
+import type { JobApp } from "@/lib/types";
 
-type FormState = Omit<Contact, "id"> & { id: string | null };
-
-const EMPTY: FormState = {
-  id: null,
-  name: "",
-  role: "",
-  company: "",
-  email: "",
-  phone: "",
-  linkedin: "",
-  notes: "",
-};
-
-const inputClasses =
-  "w-full box-border rounded-[10px] border border-neutral-300 px-3.5 py-2.5 text-[14.5px] font-semibold outline-none focus:border-orange-600 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100 dark:placeholder-neutral-500";
-
+/**
+ * Read-only directory of everyone across the tracker. Contacts belong to exactly one
+ * application, so adding and editing happens inside that application's row.
+ */
 export default function ContactsPage() {
-  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [apps, setApps] = useState<JobApp[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [form, setForm] = useState<FormState>(EMPTY);
-  const [saving, setSaving] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/contacts", { cache: "no-store" });
+      const res = await fetch("/api/applications", { cache: "no-store" });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to load contacts");
-      setContacts(json.contacts as Contact[]);
+      if (!res.ok) throw new Error(json.error || "Failed to load");
+      setApps(json.apps as JobApp[]);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -50,59 +36,23 @@ export default function ContactsPage() {
     load();
   }, [load]);
 
-  function change(field: keyof FormState, value: string) {
-    setForm((f) => ({ ...f, [field]: value }));
-  }
+  const groups = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return apps
+      .filter((a) => a.contacts.length > 0)
+      .map((a) => ({
+        app: a,
+        contacts: q
+          ? a.contacts.filter((c) =>
+              [c.name, c.role, c.email, a.company].some((v) => (v || "").toLowerCase().includes(q))
+            )
+          : a.contacts,
+      }))
+      .filter((g) => g.contacts.length > 0)
+      .sort((x, y) => x.app.company.localeCompare(y.app.company));
+  }, [apps, search]);
 
-  async function save() {
-    if (!form.name.trim()) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const { id, ...payload } = form;
-      const res = await fetch("/api/contacts", {
-        method: id ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(id ? { id, ...payload } : payload),
-      });
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        throw new Error(json.error || "Save failed");
-      }
-      setForm(EMPTY);
-      await load();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function remove(contact: Contact) {
-    if (!window.confirm(`Delete ${contact.name}? They'll be unlinked from any applications.`)) return;
-    setDeletingId(contact.id);
-    setError(null);
-    try {
-      const res = await fetch(`/api/contacts?id=${encodeURIComponent(contact.id)}`, { method: "DELETE" });
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        throw new Error(json.error || "Delete failed");
-      }
-      if (form.id === contact.id) setForm(EMPTY);
-      await load();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setDeletingId(null);
-    }
-  }
-
-  const q = search.trim().toLowerCase();
-  const filtered = q
-    ? contacts.filter((c) =>
-        [c.name, c.company, c.role, c.email].some((v) => v.toLowerCase().includes(q))
-      )
-    : contacts;
+  const total = apps.reduce((n, a) => n + a.contacts.length, 0);
 
   return (
     <main className="min-h-screen bg-[#fdfcfb] px-[5vw] pb-20 pt-8 text-[#1f1a17] dark:bg-neutral-950 dark:text-neutral-100">
@@ -110,7 +60,8 @@ export default function ContactsPage() {
         <div>
           <h1 className="text-[28px] font-black tracking-tight">Contacts</h1>
           <p className="mt-1 text-sm font-semibold text-neutral-500 dark:text-neutral-400">
-            {contacts.length} {contacts.length === 1 ? "person" : "people"} saved
+            {total} {total === 1 ? "person" : "people"} across {groups.length}{" "}
+            {groups.length === 1 ? "company" : "companies"} · add or edit from an application&apos;s row
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -130,144 +81,80 @@ export default function ContactsPage() {
         </p>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
-        {/* Add / edit form */}
-        <div className="h-fit rounded-2xl border border-black/8 bg-white p-5 dark:border-white/10 dark:bg-neutral-900">
-          <div className="mb-4 text-[15px] font-black">{form.id ? "Edit contact" : "Add contact"}</div>
-          <div className="flex flex-col gap-3">
-            <Field label="Name *">
-              <input className={inputClasses} value={form.name} onChange={(e) => change("name", e.target.value)} placeholder="e.g. Suraaj" />
-            </Field>
-            <div className="flex gap-3">
-              <Field label="Role" className="flex-1">
-                <input className={inputClasses} value={form.role} onChange={(e) => change("role", e.target.value)} placeholder="Recruiter" />
-              </Field>
-              <Field label="Company" className="flex-1">
-                <input className={inputClasses} value={form.company} onChange={(e) => change("company", e.target.value)} placeholder="Mastercard" />
-              </Field>
-            </div>
-            <Field label="Email">
-              <input className={inputClasses} value={form.email} onChange={(e) => change("email", e.target.value)} placeholder="name@company.com" />
-            </Field>
-            <div className="flex gap-3">
-              <Field label="Phone" className="flex-1">
-                <input className={inputClasses} value={form.phone} onChange={(e) => change("phone", e.target.value)} />
-              </Field>
-              <Field label="LinkedIn" className="flex-1">
-                <input className={inputClasses} value={form.linkedin} onChange={(e) => change("linkedin", e.target.value)} placeholder="https://…" />
-              </Field>
-            </div>
-            <Field label="Notes">
-              <textarea
-                className={`${inputClasses} resize-y font-medium`}
-                rows={2}
-                value={form.notes}
-                onChange={(e) => change("notes", e.target.value)}
-                placeholder="How you know them, context…"
-              />
-            </Field>
-          </div>
-          <div className="mt-5 flex gap-2.5">
-            {form.id && (
-              <button
-                onClick={() => setForm(EMPTY)}
-                className="flex-1 rounded-[10px] border border-neutral-300 bg-white py-2.5 text-sm font-extrabold hover:bg-neutral-50 dark:border-neutral-700 dark:bg-neutral-800 dark:text-neutral-100"
-              >
-                Cancel
-              </button>
-            )}
-            <button
-              onClick={save}
-              disabled={!form.name.trim() || saving}
-              className="flex-1 rounded-[10px] bg-orange-600 py-2.5 text-sm font-extrabold text-white hover:bg-orange-700 disabled:opacity-50"
+      <input
+        type="text"
+        placeholder="Search people or companies…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="mb-5 w-full max-w-xs rounded-[10px] border border-black/12 bg-white px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-orange-600 dark:border-white/10 dark:bg-neutral-800 dark:text-neutral-100"
+      />
+
+      {loading && apps.length === 0 ? (
+        <p className="py-10 text-center text-sm font-bold text-neutral-400">Loading…</p>
+      ) : groups.length === 0 ? (
+        <p className="py-10 text-center text-sm font-bold text-neutral-400 dark:text-neutral-500">
+          {total === 0
+            ? "No contacts yet — expand an application on the Applications page and add a person."
+            : "Nobody matches that search."}
+        </p>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {groups.map(({ app, contacts }) => (
+            <div
+              key={app.id}
+              className="rounded-2xl border border-black/8 bg-white p-4 dark:border-white/10 dark:bg-neutral-900"
             >
-              {saving ? "Saving…" : form.id ? "Save changes" : "Add contact"}
-            </button>
-          </div>
-        </div>
+              <div className="mb-2.5 flex items-baseline justify-between gap-2">
+                <Link href="/" className="text-[15px] font-black hover:text-orange-700 dark:hover:text-orange-400">
+                  {app.company}
+                </Link>
+                <span className="text-[11px] font-bold text-neutral-400 dark:text-neutral-500">{app.status}</span>
+              </div>
 
-        {/* List */}
-        <div>
-          <input
-            type="text"
-            placeholder="Search contacts…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="mb-3 w-full max-w-xs rounded-[10px] border border-black/12 bg-white px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-orange-600 dark:border-white/10 dark:bg-neutral-800 dark:text-neutral-100"
-          />
-
-          {loading && contacts.length === 0 ? (
-            <p className="py-10 text-center text-sm font-bold text-neutral-400">Loading…</p>
-          ) : filtered.length === 0 ? (
-            <p className="py-10 text-center text-sm font-bold text-neutral-400 dark:text-neutral-500">
-              {contacts.length === 0 ? "No contacts yet — add your first one on the left." : "No contacts match that search."}
-            </p>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2">
-              {filtered.map((c) => (
-                <div
-                  key={c.id}
-                  className="rounded-2xl border border-black/8 bg-white p-4 dark:border-white/10 dark:bg-neutral-900"
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <div className="text-[15px] font-extrabold">{c.name}</div>
-                      <div className="text-[12.5px] font-bold text-neutral-500 dark:text-neutral-400">
-                        {[c.role, c.company].filter(Boolean).join(" · ") || "—"}
-                      </div>
+              <div className="flex flex-col gap-2.5">
+                {contacts.map((c) => (
+                  <div key={c.id} className="border-t border-black/5 pt-2 first:border-0 first:pt-0 dark:border-white/5">
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      <span className="text-[13.5px] font-extrabold">{c.name}</span>
+                      {c.role && (
+                        <span className="text-[12px] font-semibold text-neutral-500 dark:text-neutral-400">{c.role}</span>
+                      )}
                     </div>
-                  </div>
-
-                  <div className="mt-2.5 flex flex-col gap-1 text-[13px] font-semibold">
-                    {c.email && (
-                      <a href={`mailto:${c.email}`} className="text-orange-700 hover:underline dark:text-orange-400">
-                        {c.email}
-                      </a>
+                    <div className="flex flex-wrap gap-x-3 text-[12.5px] font-semibold">
+                      {c.email && (
+                        <a href={`mailto:${c.email}`} className="text-orange-700 hover:underline dark:text-orange-400">
+                          {c.email}
+                        </a>
+                      )}
+                      {c.phone && <span className="text-neutral-500 dark:text-neutral-400">{c.phone}</span>}
+                      {c.linkedin && (
+                        <a
+                          href={c.linkedin}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-orange-700 hover:underline dark:text-orange-400"
+                        >
+                          LinkedIn ↗
+                        </a>
+                      )}
+                    </div>
+                    {c.lastContacted && (
+                      <div className="mt-0.5 text-[11.5px] font-bold text-neutral-400 dark:text-neutral-500">
+                        last contacted {fmtDate(c.lastContacted)}
+                      </div>
                     )}
-                    {c.phone && <span className="text-neutral-600 dark:text-neutral-400">{c.phone}</span>}
-                    {c.linkedin && (
-                      <a
-                        href={c.linkedin}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="break-all text-orange-700 hover:underline dark:text-orange-400"
-                      >
-                        LinkedIn ↗
-                      </a>
+                    {c.notes && (
+                      <p className="mt-0.5 text-[12.5px] font-medium leading-snug text-neutral-600 dark:text-neutral-400">
+                        {c.notes}
+                      </p>
                     )}
-                    {c.notes && <p className="mt-1 font-medium text-neutral-600 dark:text-neutral-400">{c.notes}</p>}
                   </div>
-
-                  <div className="mt-3.5 flex gap-2">
-                    <button
-                      onClick={() => setForm({ ...c })}
-                      className="rounded-[10px] border border-black/12 bg-white px-3 py-1.5 text-[12.5px] font-extrabold hover:bg-neutral-50 dark:border-white/10 dark:bg-neutral-800 dark:text-neutral-100"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => remove(c)}
-                      disabled={deletingId === c.id}
-                      className="rounded-[10px] border border-red-200 bg-white px-3 py-1.5 text-[12.5px] font-extrabold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/60 dark:bg-neutral-800 dark:text-red-400"
-                    >
-                      {deletingId === c.id ? "…" : "Delete"}
-                    </button>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          )}
+          ))}
         </div>
-      </div>
+      )}
     </main>
-  );
-}
-
-function Field({ label, children, className }: { label: string; children: React.ReactNode; className?: string }) {
-  return (
-    <div className={className}>
-      <label className="mb-1.5 block text-[12.5px] font-extrabold text-neutral-500 dark:text-neutral-400">{label}</label>
-      {children}
-    </div>
   );
 }

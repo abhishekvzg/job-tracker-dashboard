@@ -1,7 +1,7 @@
 import { supabase } from "./supabaseClient";
-import type { Contact, JobApp, JobAppInput, LinkedContact } from "./types";
+import { MAX_CONTACTS_PER_APPLICATION, type Contact, type ContactInput, type JobApp, type JobAppInput } from "./types";
 
-export type { Contact, JobApp, JobAppInput, LinkedContact };
+export type { Contact, ContactInput, JobApp, JobAppInput };
 
 type AppRow = {
   id: number;
@@ -16,43 +16,44 @@ type AppRow = {
 
 type ContactRow = {
   id: number;
+  application_id: number;
   name: string;
   role: string;
-  company: string;
   email: string;
   phone: string;
   linkedin: string;
   notes: string;
+  last_contacted: string;
 };
-
-type LinkRow = { application_id: number; contact_id: number; is_primary: boolean };
 
 function rowToContact(row: ContactRow): Contact {
   return {
     id: String(row.id),
+    applicationId: String(row.application_id),
     name: row.name,
     role: row.role,
-    company: row.company,
     email: row.email,
     phone: row.phone,
     linkedin: row.linkedin,
     notes: row.notes,
+    lastContacted: row.last_contacted,
   };
 }
 
-function contactToRow(data: Omit<Contact, "id">) {
+function contactToRow(data: ContactInput) {
   return {
+    application_id: Number(data.applicationId),
     name: data.name,
     role: data.role,
-    company: data.company,
     email: data.email,
     phone: data.phone,
     linkedin: data.linkedin,
     notes: data.notes,
+    last_contacted: data.lastContacted,
   };
 }
 
-function appToRow(data: Omit<JobAppInput, "contactIds" | "primaryContactId">) {
+function appToRow(data: JobAppInput) {
   return {
     company: data.company,
     url: data.url,
@@ -64,46 +65,21 @@ function appToRow(data: Omit<JobAppInput, "contactIds" | "primaryContactId">) {
   };
 }
 
-/** Replaces an application's contact links with exactly the ones given. */
-async function setAppContacts(appId: number, contactIds: string[], primaryContactId: string | null) {
-  const { error: delError } = await supabase.from("application_contacts").delete().eq("application_id", appId);
-  if (delError) throw new Error(delError.message);
-  if (contactIds.length === 0) return;
-
-  const rows = contactIds.map((cid) => ({
-    application_id: appId,
-    contact_id: Number(cid),
-    is_primary: cid === (primaryContactId ?? contactIds[0]),
-  }));
-  const { error } = await supabase.from("application_contacts").insert(rows);
-  if (error) throw new Error(error.message);
-}
-
 async function attachContacts(appRows: AppRow[]): Promise<JobApp[]> {
   const ids = appRows.map((r) => r.id);
-  const byApp = new Map<number, LinkedContact[]>();
+  const byApp = new Map<number, Contact[]>();
 
   if (ids.length > 0) {
-    const { data: links, error: linkError } = await supabase
-      .from("application_contacts")
+    const { data, error } = await supabase
+      .from("contacts")
       .select("*")
-      .in("application_id", ids);
-    if (linkError) throw new Error(linkError.message);
-
-    const contactIds = [...new Set((links as LinkRow[]).map((l) => l.contact_id))];
-    const contactsById = new Map<number, Contact>();
-    if (contactIds.length > 0) {
-      const { data: contacts, error: cErr } = await supabase.from("contacts").select("*").in("id", contactIds);
-      if (cErr) throw new Error(cErr.message);
-      (contacts as ContactRow[]).forEach((c) => contactsById.set(c.id, rowToContact(c)));
-    }
-
-    (links as LinkRow[]).forEach((l) => {
-      const contact = contactsById.get(l.contact_id);
-      if (!contact) return;
-      const list = byApp.get(l.application_id) ?? [];
-      list.push({ ...contact, isPrimary: l.is_primary });
-      byApp.set(l.application_id, list);
+      .in("application_id", ids)
+      .order("id", { ascending: true });
+    if (error) throw new Error(error.message);
+    (data as ContactRow[]).forEach((row) => {
+      const list = byApp.get(row.application_id) ?? [];
+      list.push(rowToContact(row));
+      byApp.set(row.application_id, list);
     });
   }
 
@@ -116,7 +92,7 @@ async function attachContacts(appRows: AppRow[]): Promise<JobApp[]> {
     remarks: row.remarks,
     extra: row.extra,
     dateApplied: row.date_applied,
-    contacts: (byApp.get(row.id) ?? []).sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)),
+    contacts: byApp.get(row.id) ?? [],
   }));
 }
 
@@ -136,7 +112,6 @@ export async function getApp(id: string): Promise<JobApp | null> {
 export async function createApp(data: JobAppInput): Promise<JobApp> {
   const { data: row, error } = await supabase.from("job_applications").insert(appToRow(data)).select("*").single();
   if (error) throw new Error(error.message);
-  await setAppContacts((row as AppRow).id, data.contactIds, data.primaryContactId);
   return (await attachContacts([row as AppRow]))[0];
 }
 
@@ -149,7 +124,6 @@ export async function updateApp(id: string, data: JobAppInput): Promise<void> {
     .maybeSingle();
   if (error) throw new Error(error.message);
   if (!row) throw new Error("NOT_FOUND");
-  await setAppContacts(Number(id), data.contactIds, data.primaryContactId);
 }
 
 export async function deleteApp(id: string): Promise<void> {
@@ -163,19 +137,24 @@ export async function deleteApp(id: string): Promise<void> {
   if (!row) throw new Error("NOT_FOUND");
 }
 
-export async function listContacts(): Promise<Contact[]> {
-  const { data, error } = await supabase.from("contacts").select("*").order("name", { ascending: true });
+export async function listContacts(applicationId?: string): Promise<Contact[]> {
+  let query = supabase.from("contacts").select("*").order("id", { ascending: true });
+  if (applicationId) query = query.eq("application_id", Number(applicationId));
+  const { data, error } = await query;
   if (error) throw new Error(error.message);
   return (data as ContactRow[]).map(rowToContact);
 }
 
-export async function createContact(data: Omit<Contact, "id">): Promise<Contact> {
+export async function createContact(data: ContactInput): Promise<Contact> {
+  const existing = await listContacts(data.applicationId);
+  if (existing.length >= MAX_CONTACTS_PER_APPLICATION) throw new Error("TOO_MANY_CONTACTS");
+
   const { data: row, error } = await supabase.from("contacts").insert(contactToRow(data)).select("*").single();
   if (error) throw new Error(error.message);
   return rowToContact(row as ContactRow);
 }
 
-export async function updateContact(id: string, data: Omit<Contact, "id">): Promise<void> {
+export async function updateContact(id: string, data: ContactInput): Promise<void> {
   const { data: row, error } = await supabase
     .from("contacts")
     .update(contactToRow(data))
@@ -198,27 +177,50 @@ export async function deleteContact(id: string): Promise<void> {
 }
 
 /**
- * Resolves a person named in natural language (from the Gemini chat or an MCP tool
- * call) to a saved contact, creating one if nothing matches — so those flows can
- * keep taking a plain name without the caller knowing about contact ids.
+ * Finds a person by name within one application. Contacts are scoped to a single
+ * application, so the same name at two companies stays two separate records.
  */
-export async function findOrCreateContactByName(name: string, company = ""): Promise<Contact> {
-  const trimmed = name.trim();
-  const contacts = await listContacts();
-  const lower = trimmed.toLowerCase();
-  const match =
+export async function findContactByName(applicationId: string, name: string): Promise<Contact | null> {
+  const contacts = await listContacts(applicationId);
+  const lower = name.trim().toLowerCase();
+  return (
     contacts.find((c) => c.name.toLowerCase() === lower) ??
-    contacts.find((c) => c.name.toLowerCase().includes(lower) || lower.includes(c.name.toLowerCase()));
-  if (match) return match;
+    contacts.find((c) => c.name.toLowerCase().includes(lower) || lower.includes(c.name.toLowerCase())) ??
+    null
+  );
+}
 
-  const isUrl = /^https?:\/\//i.test(trimmed);
+/** Creates the contact if this application doesn't already have someone by that name. */
+export async function upsertContactByName(
+  applicationId: string,
+  name: string,
+  fields: Partial<Omit<ContactInput, "applicationId" | "name">> = {}
+): Promise<Contact> {
+  const existing = await findContactByName(applicationId, name);
+  if (existing) {
+    const merged: ContactInput = {
+      applicationId,
+      name: existing.name,
+      role: fields.role ?? existing.role,
+      email: fields.email ?? existing.email,
+      phone: fields.phone ?? existing.phone,
+      linkedin: fields.linkedin ?? existing.linkedin,
+      notes: fields.notes ?? existing.notes,
+      lastContacted: fields.lastContacted ?? existing.lastContacted,
+    };
+    await updateContact(existing.id, merged);
+    return { ...merged, id: existing.id };
+  }
+
+  const isUrl = /^https?:\/\//i.test(name.trim());
   return createContact({
-    name: isUrl ? trimmed.replace(/\/+$/, "").split("/").pop()!.replace(/-/g, " ") : trimmed,
-    role: "",
-    company,
-    email: "",
-    phone: "",
-    linkedin: isUrl ? trimmed : "",
-    notes: "",
+    applicationId,
+    name: isUrl ? name.trim().replace(/\/+$/, "").split("/").pop()!.replace(/-/g, " ") : name.trim(),
+    role: fields.role ?? "",
+    email: fields.email ?? "",
+    phone: fields.phone ?? "",
+    linkedin: fields.linkedin ?? (isUrl ? name.trim() : ""),
+    notes: fields.notes ?? "",
+    lastContacted: fields.lastContacted ?? "",
   });
 }

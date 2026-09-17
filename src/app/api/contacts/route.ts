@@ -1,28 +1,39 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createContact, deleteContact, listContacts, updateContact } from "@/lib/db";
-import type { Contact } from "@/lib/types";
+import { MAX_CONTACTS_PER_APPLICATION, type ContactInput } from "@/lib/types";
 
 function statusFor(message: string) {
   if (message === "NOT_FOUND") return 404;
+  if (message === "TOO_MANY_CONTACTS") return 409;
   return 500;
 }
 
-function isValidPayload(body: unknown): body is Omit<Contact, "id"> {
+function errorBody(message: string) {
+  if (message === "TOO_MANY_CONTACTS") {
+    return { error: `An application can have at most ${MAX_CONTACTS_PER_APPLICATION} points of contact.` };
+  }
+  return { error: message };
+}
+
+function isValidPayload(body: unknown): body is ContactInput {
   if (!body || typeof body !== "object") return false;
   const b = body as Record<string, unknown>;
   return (
+    typeof b.applicationId === "string" &&
+    b.applicationId.length > 0 &&
     typeof b.name === "string" &&
     b.name.trim().length > 0 &&
-    ["role", "company", "email", "phone", "linkedin", "notes"].every((k) => typeof b[k] === "string")
+    ["role", "email", "phone", "linkedin", "notes", "lastContacted"].every((k) => typeof b[k] === "string")
   );
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    return NextResponse.json({ contacts: await listContacts() });
+    const applicationId = req.nextUrl.searchParams.get("applicationId") ?? undefined;
+    return NextResponse.json({ contacts: await listContacts(applicationId) });
   } catch (err) {
     const message = (err as Error).message;
-    return NextResponse.json({ error: message }, { status: statusFor(message) });
+    return NextResponse.json(errorBody(message), { status: statusFor(message) });
   }
 }
 
@@ -33,7 +44,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ contact: await createContact(body) });
   } catch (err) {
     const message = (err as Error).message;
-    return NextResponse.json({ error: message }, { status: statusFor(message) });
+    return NextResponse.json(errorBody(message), { status: statusFor(message) });
   }
 }
 
@@ -48,7 +59,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = (err as Error).message;
-    return NextResponse.json({ error: message }, { status: statusFor(message) });
+    return NextResponse.json(errorBody(message), { status: statusFor(message) });
   }
 }
 
@@ -60,6 +71,6 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     const message = (err as Error).message;
-    return NextResponse.json({ error: message }, { status: statusFor(message) });
+    return NextResponse.json(errorBody(message), { status: statusFor(message) });
   }
 }

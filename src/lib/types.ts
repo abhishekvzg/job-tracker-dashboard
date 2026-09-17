@@ -1,15 +1,19 @@
+export const MAX_CONTACTS_PER_APPLICATION = 10;
+
 export type Contact = {
   id: string;
+  applicationId: string;
   name: string;
   role: string;
-  company: string;
   email: string;
   phone: string;
   linkedin: string;
   notes: string;
+  /** YYYY-MM-DD of the last time you reached out. Empty if never. */
+  lastContacted: string;
 };
 
-export type LinkedContact = Contact & { isPrimary: boolean };
+export type ContactInput = Omit<Contact, "id">;
 
 export type JobApp = {
   id: string;
@@ -20,17 +24,12 @@ export type JobApp = {
   remarks: string;
   extra: string;
   dateApplied: string;
-  contacts: LinkedContact[];
+  contacts: Contact[];
 };
 
-export type JobAppInput = Omit<JobApp, "id" | "contacts"> & {
-  contactIds: string[];
-  primaryContactId: string | null;
-};
+export type JobAppInput = Omit<JobApp, "id" | "contacts">;
 
 export const STATUS_OPTIONS = ["New", "Applied", "HR Call", "Interview", "Rejected", "Job Offered"] as const;
-
-export const TERMINAL_STATUSES = ["Rejected", "Job Offered"] as const;
 
 // The expected next step(s) for each status. Used to surface the likely choice
 // first — every status stays selectable, since reality skips steps.
@@ -44,7 +43,3 @@ export const NEXT_STATUSES: Record<string, readonly string[]> = {
 };
 
 export const CHANNEL_OPTIONS = ["LinkedIn", "Referral", "Mail", "Company Website", "Naukri", "Other"] as const;
-
-export function primaryContact(app: JobApp): LinkedContact | null {
-  return app.contacts.find((c) => c.isPrimary) ?? app.contacts[0] ?? null;
-}

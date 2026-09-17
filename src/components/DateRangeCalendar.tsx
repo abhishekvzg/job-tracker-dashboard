@@ -1,5 +1,7 @@
 "use client";
 
+import { todayISO } from "@/lib/format";
+
 const WEEKDAY_LABELS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
 const MONTH_LABELS = [
   "January", "February", "March", "April", "May", "June",
@@ -21,7 +23,7 @@ export function DateRangeCalendar({ month, dateFrom, dateTo, onPrevMonth, onNext
   const firstOfMonth = new Date(y, m - 1, 1);
   const startOffset = firstOfMonth.getDay();
   const daysInMonth = new Date(y, m, 0).getDate();
-  const todayStr = new Date().toISOString().slice(0, 10);
+  const todayStr = todayISO();
 
   const cells: { day: number | null; dateStr: string }[] = [];
   for (let i = 0; i < startOffset; i++) cells.push({ day: null, dateStr: "" });
