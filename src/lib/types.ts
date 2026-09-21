@@ -42,4 +42,10 @@ export const NEXT_STATUSES: Record<string, readonly string[]> = {
   "Job Offered": [],
 };
 
-export const CHANNEL_OPTIONS = ["LinkedIn", "Referral", "Mail", "Company Website", "Naukri", "Other"] as const;
+// The only channels an application can be logged through. "" (unset) is also valid —
+// callers just can't invent a new one; anything that doesn't fit goes in "Others".
+export const CHANNEL_OPTIONS = ["LinkedIn", "Naukri", "Email", "Company Website", "YCombinator", "Others"] as const;
+
+export function isValidChannel(channel: string): boolean {
+  return channel === "" || (CHANNEL_OPTIONS as readonly string[]).includes(channel);
+}

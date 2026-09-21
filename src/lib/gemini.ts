@@ -27,7 +27,7 @@ const RESPONSE_SCHEMA = {
     company: { type: "STRING" },
     url: { type: "STRING" },
     status: { type: "STRING" },
-    channel: { type: "STRING" },
+    channel: { type: "STRING", enum: [...CHANNEL_OPTIONS, ""] },
     poc: { type: "STRING" },
     remarks: { type: "STRING" },
     dateApplied: { type: "STRING" },
@@ -38,6 +38,14 @@ const RESPONSE_SCHEMA = {
 
 function normalizeStatus(status: string, fallback: string): string {
   const match = STATUS_OPTIONS.find((s) => s.toLowerCase() === status.trim().toLowerCase());
+  return match ?? fallback;
+}
+
+// Defense in depth: the schema's enum already constrains this, but never trust a
+// model response over the actual fixed list.
+function normalizeChannel(channel: string, fallback: string): string {
+  if (channel.trim() === "") return "";
+  const match = CHANNEL_OPTIONS.find((c) => c.toLowerCase() === channel.trim().toLowerCase());
   return match ?? fallback;
 }
 
@@ -64,7 +72,10 @@ export async function interpretCommand(message: string, apps: JobApp[], history:
   const prompt = `You are an assistant embedded in a personal job application tracker web app.
 Today's date is ${today} (YYYY-MM-DD format).
 Valid status values: ${STATUS_OPTIONS.join(", ")}.
-Common channel values: ${CHANNEL_OPTIONS.join(", ")} (free text also allowed).
+Valid channel values: ${CHANNEL_OPTIONS.join(", ")}, or "" if not mentioned. These are the ONLY channels that
+exist — never invent a new one. Map what the user says to the closest fit (e.g. "naukri.com" -> "Naukri",
+"applied on their site" -> "Company Website", "workatastartup" or "YC" -> "YCombinator"); if genuinely nothing
+fits, use "Others".
 
 Current tracked applications, with every current field value (use these exact values to fill in
 anything the user's message does not explicitly change):
@@ -121,5 +132,6 @@ User's latest message: "${message}"`;
   const parsed = JSON.parse(text) as ChatAction;
   const fallbackApp = apps.find((a) => a.id === parsed.id);
   parsed.status = normalizeStatus(parsed.status, fallbackApp?.status ?? "Applied");
+  parsed.channel = normalizeChannel(parsed.channel, fallbackApp?.channel ?? "");
   return parsed;
 }

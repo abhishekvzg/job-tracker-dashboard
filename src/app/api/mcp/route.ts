@@ -13,7 +13,7 @@ import {
   updateApp,
   upsertContactByName,
 } from "@/lib/db";
-import { MAX_CONTACTS_PER_APPLICATION, STATUS_OPTIONS } from "@/lib/types";
+import { CHANNEL_OPTIONS, MAX_CONTACTS_PER_APPLICATION, STATUS_OPTIONS } from "@/lib/types";
 import { resolveApp, type ResolveResult } from "@/lib/mcpResolve";
 import { todayISO } from "@/lib/format";
 
@@ -52,16 +52,12 @@ const mcpServerHandler = createMcpHandler(
         description: "List tracked job applications with their points of contact, optionally filtered.",
         inputSchema: z.object({
           status: z.enum(STATUS_OPTIONS).optional(),
-          channel: z.string().optional(),
+          channel: z.enum(CHANNEL_OPTIONS).optional(),
         }),
       },
       async ({ status, channel }) => {
         const apps = await listApps();
-        return toolResult(
-          apps.filter(
-            (a) => (!status || a.status === status) && (!channel || a.channel.toLowerCase() === channel.toLowerCase())
-          )
-        );
+        return toolResult(apps.filter((a) => (!status || a.status === status) && (!channel || a.channel === channel)));
       }
     );
 
@@ -83,12 +79,14 @@ const mcpServerHandler = createMcpHandler(
       "add_application",
       {
         title: "Add a job application",
-        description: "Add a new job application. Points of contact can be included in the same call.",
+        description:
+          "Add a new job application. Points of contact can be included in the same call. `channel` must be " +
+          "one of the fixed options — pick whichever fits best, or Others if none do; never invent a new one.",
         inputSchema: z.object({
           company: z.string(),
           url: z.string().optional(),
           status: z.enum(STATUS_OPTIONS).optional(),
-          channel: z.string().optional(),
+          channel: z.enum(CHANNEL_OPTIONS).optional(),
           remarks: z.string().optional(),
           dateApplied: z.string().optional(),
           contacts: z
@@ -120,14 +118,15 @@ const mcpServerHandler = createMcpHandler(
       {
         title: "Update a job application",
         description:
-          "Update an existing application (e.g. change status). Identify it by id, or by company name (fuzzy match).",
+          "Update an existing application (e.g. change status). Identify it by id, or by company name (fuzzy match). " +
+          "`channel` must be one of the fixed options — pick whichever fits best, or Others if none do.",
         inputSchema: z.object({
           id: z.string().optional(),
           company: z.string().optional(),
           newCompany: z.string().optional(),
           status: z.enum(STATUS_OPTIONS).optional(),
           url: z.string().optional(),
-          channel: z.string().optional(),
+          channel: z.enum(CHANNEL_OPTIONS).optional(),
           remarks: z.string().optional(),
           dateApplied: z.string().optional(),
         }),

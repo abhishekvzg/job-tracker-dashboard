@@ -1,18 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createApp, deleteApp, listApps, updateApp } from "@/lib/db";
-import type { JobAppInput } from "@/lib/types";
+import { STATUS_OPTIONS, isValidChannel, type JobAppInput } from "@/lib/types";
 
 function statusFor(message: string) {
   if (message === "NOT_FOUND") return 404;
   return 500;
 }
 
+// The single point every write path funnels through, so channel/status can't be set
+// to something outside the fixed lists no matter which caller (UI, chat, MCP, or a
+// direct API call) sent the request.
 function isValidAppPayload(body: unknown): body is JobAppInput {
   if (!body || typeof body !== "object") return false;
   const b = body as Record<string, unknown>;
-  return ["company", "url", "status", "channel", "remarks", "extra", "dateApplied"].every(
-    (k) => typeof b[k] === "string"
-  );
+  if (!["company", "url", "status", "channel", "remarks", "extra", "dateApplied"].every((k) => typeof b[k] === "string"))
+    return false;
+  if (!(STATUS_OPTIONS as readonly string[]).includes(b.status as string)) return false;
+  if (!isValidChannel(b.channel as string)) return false;
+  return true;
 }
 
 export async function GET() {

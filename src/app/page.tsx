@@ -173,14 +173,6 @@ export default function Home() {
     }
   }
 
-  const channelOptions = useMemo(() => {
-    const set = new Set<string>(CHANNEL_OPTIONS);
-    apps.forEach((a) => {
-      if (a.channel) set.add(a.channel);
-    });
-    return Array.from(set);
-  }, [apps]);
-
   const filteredApps = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = apps.filter((a) => {
@@ -363,7 +355,7 @@ export default function Home() {
           className="cursor-pointer rounded-[10px] border border-black/12 bg-[#fdfcfb] px-3.5 py-2.5 text-sm font-bold outline-none dark:border-white/10 dark:bg-neutral-800 dark:text-neutral-100"
         >
           <option value="All">All channels</option>
-          {channelOptions.map((c) => (
+          {CHANNEL_OPTIONS.map((c) => (
             <option key={c} value={c}>
               {c}
             </option>
