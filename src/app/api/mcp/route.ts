@@ -5,17 +5,30 @@ import { z } from "zod";
 import { auth, MCP_RESOURCE } from "@/lib/auth";
 import {
   createApp,
+  dailyProgress,
   deleteApp,
   deleteContact,
   findContactByName,
   listApps,
   listContacts,
+  listOutreach,
+  logOutreach,
+  logReply,
+  outreachStats,
+  suggestTargets,
   updateApp,
   upsertContactByName,
 } from "@/lib/db";
-import { CHANNEL_OPTIONS, MAX_CONTACTS_PER_APPLICATION, STATUS_OPTIONS } from "@/lib/types";
+import {
+  CHANNEL_OPTIONS,
+  DAILY_OUTREACH_GOAL,
+  FOLLOW_UP_AFTER_DAYS,
+  MAX_CONTACTS_PER_APPLICATION,
+  STATUS_OPTIONS,
+} from "@/lib/types";
 import { resolveApp, type ResolveResult } from "@/lib/mcpResolve";
 import { todayISO } from "@/lib/format";
+import { guessEmails } from "@/lib/emailGuess";
 
 function toolResult(payload: unknown) {
   return {
@@ -242,6 +255,128 @@ const mcpServerHandler = createMcpHandler(
         if (!contact) return toolResult({ error: `No contact named "${name}" at ${resolved.app.company}.` });
         await deleteContact(contact.id);
         return toolResult({ removed: contact.name, from: resolved.app.company });
+      }
+    );
+
+    // ---- Cold email routine -------------------------------------------------
+
+    server.registerTool(
+      "outreach_today",
+      {
+        title: "Today's cold email progress",
+        description:
+          `Start the cold email routine here. Returns how many of the daily ${DAILY_OUTREACH_GOAL} emails are ` +
+          "already sent, the current streak, which day of the challenge it is, and lifetime totals.",
+        inputSchema: z.object({}),
+      },
+      async () => toolResult(await dailyProgress())
+    );
+
+    server.registerTool(
+      "suggest_targets",
+      {
+        title: "Who to email next",
+        description:
+          "Ranked list of who to write to next, with the context needed to personalise each email (company, " +
+          "role, listing URL, remarks, and the angle used last time for follow-ups). Reasons are: never_emailed " +
+          `(you have their address and haven't written), follow_up_due (silent for ${FOLLOW_UP_AFTER_DAYS}+ days), ` +
+          "and no_contacts (nobody found at that company yet — search LinkedIn for a senior person in the role, not HR).",
+        inputSchema: z.object({
+          limit: z.number().int().min(1).max(50).optional().describe(`Defaults to ${DAILY_OUTREACH_GOAL}.`),
+        }),
+      },
+      async ({ limit }) => toolResult(await suggestTargets(limit ?? DAILY_OUTREACH_GOAL))
+    );
+
+    server.registerTool(
+      "log_outreach",
+      {
+        title: "Log a cold email that was sent",
+        description:
+          "Record an email you sent to a person at a company. Creates the application (channel Email, status " +
+          "Applied) and the contact if they aren't tracked yet, so this is the only call needed after sending. " +
+          "Put the personalisation angle in `notes` — it's shown back when it's time to follow up.",
+        inputSchema: z.object({
+          company: z.string(),
+          name: z.string().describe("Who it was sent to."),
+          email: z.string().optional(),
+          role: z.string().optional(),
+          linkedin: z.string().optional(),
+          subject: z.string().optional(),
+          notes: z.string().optional().describe("The angle used — what made this email personal to them."),
+          isFollowUp: z.boolean().optional(),
+          sentOn: z.string().optional().describe("YYYY-MM-DD. Defaults to today."),
+        }),
+      },
+      async (args) => toolResult(await logOutreach(args))
+    );
+
+    server.registerTool(
+      "log_reply",
+      {
+        title: "Log a reply to a cold email",
+        description:
+          "Mark that someone replied, which feeds the response rate and takes them out of the follow-up queue. " +
+          "Marks their most recent unanswered email. If the reply leads somewhere, also move the application " +
+          "forward with update_application (HR Call / Interview).",
+        inputSchema: z.object({
+          company: z.string(),
+          name: z.string(),
+          repliedOn: z.string().optional().describe("YYYY-MM-DD. Defaults to today."),
+          notes: z.string().optional().describe("What they said."),
+        }),
+      },
+      async (args) => {
+        const result = await logReply(args);
+        if (!result) return toolResult({ error: `No unanswered email found for ${args.name} at ${args.company}.` });
+        return toolResult(result);
+      }
+    );
+
+    server.registerTool(
+      "outreach_stats",
+      {
+        title: "Cold email funnel",
+        description: "Emails sent, replies, response rate, and how many reached interview or an offer.",
+        inputSchema: z.object({
+          days: z.number().int().min(1).max(365).optional().describe("Limit to the last N days. Omit for lifetime."),
+        }),
+      },
+      async ({ days }) => toolResult(await outreachStats(days))
+    );
+
+    server.registerTool(
+      "outreach_history",
+      {
+        title: "Emails sent to one person",
+        description: "Every email sent to a person at a company, newest first, with replies and the angle used.",
+        inputSchema: z.object({ company: z.string(), name: z.string() }),
+      },
+      async ({ company, name }) => {
+        const resolved = await resolveApp({ company });
+        if (resolved.status !== "found") return unresolved(resolved);
+        const contact = await findContactByName(resolved.app.id, name);
+        if (!contact) return toolResult({ error: `No contact named "${name}" at ${resolved.app.company}.` });
+        return toolResult({ company: resolved.app.company, contact: contact.name, history: await listOutreach(contact.id) });
+      }
+    );
+
+    server.registerTool(
+      "guess_emails",
+      {
+        title: "Guess someone's work email",
+        description:
+          "When an address can't be found, returns the usual permutations at the company domain. Send to the " +
+          "first one and put the rest in BCC, so a single send covers every guess without the recipient seeing it.",
+        inputSchema: z.object({
+          name: z.string(),
+          domain: z.string().describe("Company domain or website, e.g. acme.com."),
+        }),
+      },
+      async ({ name, domain }) => {
+        const guess = guessEmails(name, domain);
+        if (!guess.to) return toolResult({ error: "Need both a name and a company domain." });
+        return toolResult(guess);
       }
     );
   },

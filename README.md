@@ -97,7 +97,40 @@ Then in claude.ai: Settings → Connectors → Add custom connector → the depl
 automatically".
 
 Tools exposed: `list_applications`, `find_application`, `add_application`,
-`update_application`, `delete_application`, `list_contacts`, `add_contact`.
+`update_application`, `delete_application`, `save_contacts`, `list_contacts`,
+`delete_contact`, plus the cold email tools below.
+
+## The 30-day cold email routine
+
+Based on Ankur Warikoo's approach: find someone senior in the role you want (**not** HR —
+they get too many of these), send one email so personalised it couldn't have been sent to
+anyone else, and do that **3× a day for 30 days**. Cold emails convert at 1–2%; personalised
+ones at 8–10%, so ~100 emails is roughly 8–10 replies, 3–5 interviews, 1–2 offers.
+
+The tracker is the scoreboard; claude.ai runs the loop. Paste this into a claude.ai chat:
+
+> Run my cold email routine. Check `outreach_today`, then `suggest_targets`. For each
+> target, draft a personalised email — use the company, role and remarks for context, and
+> for follow-ups reference the previous angle. Create each as a Gmail draft for me to
+> review, then log it with `log_outreach` including the angle in `notes`.
+
+Claude will use the Gmail connector for the drafts and leave them unsent for you to check.
+For an address you don't have, `guess_emails` returns the usual permutations at the
+company domain — send to the first and BCC the rest, so one send covers them all.
+
+Sweeping for replies:
+
+> Search Gmail for replies from anyone in `list_contacts`, and `log_reply` for each one
+> you find. If a reply leads to a call, move the application to HR Call.
+
+Cold email tools: `outreach_today` (daily progress, streak, challenge day),
+`suggest_targets` (who to write to next, with personalisation context),
+`log_outreach`, `log_reply`, `outreach_history`, `outreach_stats`, `guess_emails`.
+
+Logging an email for a company that isn't tracked yet creates the application
+automatically (channel `Email`, status `Applied`) and attaches the person — the cold email
+*is* the application in this playbook. The dashboard shows today's quota, the streak, the
+response rate, and anyone silent for 5+ days.
 
 ## Deploying (e.g. Vercel)
 

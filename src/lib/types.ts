@@ -49,3 +49,26 @@ export const CHANNEL_OPTIONS = ["LinkedIn", "Naukri", "Email", "Company Website"
 export function isValidChannel(channel: string): boolean {
   return channel === "" || (CHANNEL_OPTIONS as readonly string[]).includes(channel);
 }
+
+/** One cold email (or follow-up) sent to a contact. */
+export type Outreach = {
+  id: string;
+  contactId: string;
+  /** YYYY-MM-DD the email went out. */
+  sentOn: string;
+  subject: string;
+  /** The angle used — what made it personal. Read back when writing a follow-up. */
+  notes: string;
+  isFollowUp: boolean;
+  /** YYYY-MM-DD they replied. Empty while still waiting. */
+  repliedOn: string;
+  replyNotes: string;
+};
+
+export type OutreachInput = Omit<Outreach, "id">;
+
+// The Warikoo cadence: 3 personalised emails a day, every day, for 30 days.
+export const DAILY_OUTREACH_GOAL = 3;
+export const CHALLENGE_DAYS = 30;
+/** Days of silence before someone shows up in the follow-up queue. */
+export const FOLLOW_UP_AFTER_DAYS = 5;

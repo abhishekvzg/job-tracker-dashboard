@@ -8,6 +8,7 @@ import { ChatWidget } from "@/components/ChatWidget";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { CHANNEL_OPTIONS, NEXT_STATUSES, STATUS_OPTIONS, type JobApp } from "@/lib/types";
 import { ContactsPanel } from "@/components/ContactsPanel";
+import { ColdEmailPanel } from "@/components/ColdEmailPanel";
 import { fmtDate, fmtShort, statusStyle } from "@/lib/format";
 
 type SortKey = "company" | "status" | "date" | "channel";
@@ -63,6 +64,8 @@ export default function Home() {
   const [form, setForm] = useState<AppFormState>(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Bumped on every reload so the cold email scoreboard refetches alongside the table.
+  const [dataVersion, setDataVersion] = useState(0);
 
   const loadApps = useCallback(async () => {
     setLoading(true);
@@ -75,6 +78,7 @@ export default function Home() {
       }
       const json = await res.json();
       setApps(json.apps as JobApp[]);
+      setDataVersion((v) => v + 1);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -312,6 +316,8 @@ export default function Home() {
           {error}
         </p>
       )}
+
+      <ColdEmailPanel refreshKey={dataVersion} />
 
       {/* KPIs */}
       <div className="mb-7 grid grid-cols-[repeat(auto-fit,minmax(180px,1fr))] gap-3.5">
@@ -591,7 +597,12 @@ function FragmentRow({
             </div>
 
             <div className="mt-4 border-t border-black/5 pt-3.5 dark:border-white/5">
-              <ContactsPanel applicationId={app.id} contacts={app.contacts} onChanged={onContactsChanged} />
+              <ContactsPanel
+                applicationId={app.id}
+                company={app.company}
+                contacts={app.contacts}
+                onChanged={onContactsChanged}
+              />
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2">

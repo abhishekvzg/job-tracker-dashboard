@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { MAX_CONTACTS_PER_APPLICATION, type Contact } from "@/lib/types";
-import { fmtDate, todayISO } from "@/lib/format";
+import { useCallback, useEffect, useState } from "react";
+import { MAX_CONTACTS_PER_APPLICATION, type Contact, type Outreach } from "@/lib/types";
+import { fmtDate } from "@/lib/format";
 
 type Draft = Omit<Contact, "id" | "applicationId">;
 
@@ -17,13 +17,16 @@ const input =
  */
 export function ContactsPanel({
   applicationId,
+  company,
   contacts,
   onChanged,
 }: {
   applicationId: string;
+  company: string;
   contacts: Contact[];
   onChanged: () => void;
 }) {
+  const [history, setHistory] = useState<Record<string, Outreach[]>>({});
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
@@ -31,6 +34,73 @@ export function ContactsPanel({
   const [error, setError] = useState<string | null>(null);
 
   const atLimit = contacts.length >= MAX_CONTACTS_PER_APPLICATION;
+
+  const loadHistory = useCallback(async () => {
+    const entries = await Promise.all(
+      contacts.map(async (c) => {
+        try {
+          const res = await fetch(`/api/outreach?contactId=${encodeURIComponent(c.id)}`, { cache: "no-store" });
+          const json = await res.json();
+          return [c.id, res.ok ? (json.outreach as Outreach[]) : []] as const;
+        } catch {
+          return [c.id, [] as Outreach[]] as const;
+        }
+      })
+    );
+    setHistory(Object.fromEntries(entries));
+  }, [contacts]);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- load email history for the expanded row
+    loadHistory();
+  }, [loadHistory]);
+
+  async function logEmail(c: Contact) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/outreach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          company,
+          name: c.name,
+          email: c.email,
+          role: c.role,
+          linkedin: c.linkedin,
+          isFollowUp: (history[c.id] ?? []).length > 0,
+        }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not log the email");
+      await loadHistory();
+      onChanged();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function markReplied(c: Contact) {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/outreach", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ company, name: c.name }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(json.error || "Could not mark the reply");
+      await loadHistory();
+      onChanged();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   function set(field: keyof Draft, value: string) {
     setDraft((d) => ({ ...d, [field]: value }));
@@ -96,38 +166,6 @@ export function ContactsPanel({
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
         throw new Error(json.error || "Could not remove");
-      }
-      onChanged();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function markContactedToday(c: Contact) {
-    setBusy(true);
-    setError(null);
-    try {
-      const today = todayISO();
-      const res = await fetch("/api/contacts", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          id: c.id,
-          applicationId,
-          name: c.name,
-          role: c.role,
-          email: c.email,
-          phone: c.phone,
-          linkedin: c.linkedin,
-          notes: c.notes,
-          lastContacted: today,
-        }),
-      });
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        throw new Error(json.error || "Could not update");
       }
       onChanged();
     } catch (err) {
@@ -214,14 +252,42 @@ export function ContactsPanel({
                 </p>
               )}
 
+              {(history[c.id]?.length ?? 0) > 0 && (
+                <div className="mt-1.5 flex flex-col gap-0.5 border-l-2 border-neutral-200 pl-2 dark:border-neutral-700">
+                  {history[c.id].map((o) => (
+                    <div key={o.id} className="text-[11.5px] font-semibold text-neutral-500 dark:text-neutral-400">
+                      {fmtDate(o.sentOn)}
+                      {o.isFollowUp && " · follow-up"}
+                      {o.subject && ` · ${o.subject}`}
+                      {o.repliedOn ? (
+                        <span className="ml-1 font-extrabold text-emerald-600 dark:text-emerald-400">
+                          replied {fmtDate(o.repliedOn)}
+                        </span>
+                      ) : (
+                        <span className="ml-1 text-neutral-400 dark:text-neutral-600">no reply yet</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="mt-1.5 flex flex-wrap gap-2">
                 <button
-                  onClick={() => markContactedToday(c)}
+                  onClick={() => logEmail(c)}
                   disabled={busy}
                   className="rounded-[8px] border border-black/12 bg-white px-2 py-1 text-[11.5px] font-extrabold hover:bg-neutral-50 disabled:opacity-50 dark:border-white/10 dark:bg-neutral-800 dark:text-neutral-100"
                 >
-                  Contacted today
+                  {(history[c.id]?.length ?? 0) > 0 ? "Log follow-up" : "Log email sent"}
                 </button>
+                {(history[c.id] ?? []).some((o) => !o.repliedOn) && (
+                  <button
+                    onClick={() => markReplied(c)}
+                    disabled={busy}
+                    className="rounded-[8px] border border-emerald-300 bg-white px-2 py-1 text-[11.5px] font-extrabold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 dark:border-emerald-900/60 dark:bg-neutral-800 dark:text-emerald-400"
+                  >
+                    Mark replied
+                  </button>
+                )}
                 <button
                   onClick={() => startEdit(c)}
                   className="rounded-[8px] border border-black/12 bg-white px-2 py-1 text-[11.5px] font-extrabold hover:bg-neutral-50 dark:border-white/10 dark:bg-neutral-800 dark:text-neutral-100"
